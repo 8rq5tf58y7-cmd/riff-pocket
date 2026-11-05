@@ -1,0 +1,64 @@
+# XcodeGen spec — CI runs `xcodegen generate` to create RiffPocket.xcodeproj.
+# No Xcode or Mac needed on your machine.
+name: RiffPocket
+options:
+  bundleIdPrefix: io.github.riffpocket
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+
+packages:
+  RiffCore:
+    path: Packages/RiffCore
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    from: "0.9.0"
+
+targets:
+  RiffPocket:
+    type: application
+    platform: iOS
+    sources:
+      - App/Sources
+      - App/Resources
+    dependencies:
+      - package: RiffCore
+      - package: WhisperKit
+    settings:
+      base:
+        # Change to something unique to you (e.g. com.yourname.riffpocket) before using TestFlight.
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.riffpocket.app
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Riff Pocket
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+        NSMicrophoneUsageDescription: Record audio with your iPhone when your recorder isn't with you.
+        NSLocalNetworkUsageDescription: Reach Ollama or your Riffado server on your network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UIBackgroundModes: [audio]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+
+schemes:
+  RiffPocket:
+    build:
+      targets:
+        RiffPocket: all
+    run:
+      config: Debug
+    archive:
+      config: Release
