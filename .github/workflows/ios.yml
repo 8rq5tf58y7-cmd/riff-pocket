@@ -1,0 +1,99 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: "Also upload to TestFlight (needs App Store Connect secrets)"
+        type: boolean
+        default: false
+
+jobs:
+  core-tests:
+    name: RiffCore tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path Packages/RiffCore
+
+  ios-build:
+    name: Build iOS app
+    runs-on: macos-26
+    needs: core-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: RiffCore tests (Apple platform)
+        run: swift test --package-path Packages/RiffCore
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project RiffPocket.xcodeproj -scheme RiffPocket \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | xcbeautify || exit ${PIPESTATUS[0]}
+
+      - name: Package unsigned .ipa (sign with Sideloadly on Windows)
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/RiffPocket.app Payload/
+          zip -qry RiffPocket-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiffPocket-unsigned-ipa
+          path: RiffPocket-unsigned.ipa
+          retention-days: 14
+
+  testflight:
+    name: TestFlight
+    runs-on: macos-26
+    needs: ios-build
+    if: github.event_name == 'workflow_dispatch' && inputs.testflight
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - run: brew install xcodegen && xcodegen generate
+      - name: Archive, sign (cloud-managed) and upload
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEY=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$KEY"
+          AUTH="-allowProvisioningUpdates -authenticationKeyPath $KEY -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
+          xcodebuild -project RiffPocket.xcodeproj -scheme RiffPocket -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/RiffPocket.xcarchive \
+            DEVELOPMENT_TEAM=$APPLE_TEAM_ID CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} $AUTH archive
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/RiffPocket.xcarchive \
+            -exportOptionsPlist ExportOptions.plist -exportPath build/export $AUTH
