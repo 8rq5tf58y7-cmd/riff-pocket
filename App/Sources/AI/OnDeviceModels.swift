@@ -54,15 +54,15 @@ struct WhisperKitTranscriber: Transcriber {
     let model: String
     var displayName: String { "WhisperKit (\(model))" }
 
-    func transcribe(fileURL: URL, language: String?) async throws -> Transcript {
+    func transcribe(fileURL: URL, language: String?) async throws -> RiffCore.Transcript {
         let pipe = try await WhisperKitCache.shared.pipe(model: model)
         var options = DecodingOptions()
         options.language = language
         options.skipSpecialTokens = true
         let results = try await pipe.transcribe(audioPath: fileURL.path, decodeOptions: options)
         let segments = results.flatMap(\.segments).map {
-            TranscriptSegment(start: Double($0.start), end: Double($0.end), text: $0.text)
+            RiffCore.TranscriptSegment(start: Double($0.start), end: Double($0.end), text: $0.text)
         }
-        return Transcript(language: results.first?.language, segments: segments)
+        return RiffCore.Transcript(language: results.first?.language, segments: segments)
     }
 }

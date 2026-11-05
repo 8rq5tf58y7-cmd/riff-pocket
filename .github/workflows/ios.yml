@@ -41,16 +41,21 @@ jobs:
 
       - name: Build unsigned app
         run: |
+          set -o pipefail
           xcodebuild -project RiffPocket.xcodeproj -scheme RiffPocket \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build | xcbeautify || exit ${PIPESTATUS[0]}
+            build | xcbeautify
 
       - name: Package unsigned .ipa (sign with Sideloadly on Windows)
         run: |
+          set -euo pipefail
+          APP=build/Build/Products/Release-iphoneos/RiffPocket.app
+          test -f "$APP/RiffPocket" || { echo "::error::$APP has no executable — the build did not produce an app"; exit 1; }
+          du -sh "$APP"
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/RiffPocket.app Payload/
+          cp -R "$APP" Payload/
           zip -qry RiffPocket-unsigned.ipa Payload
 
       - uses: actions/upload-artifact@v4
