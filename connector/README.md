@@ -52,7 +52,7 @@ Open **`https://riff-pocket-connector.<you>.workers.dev/setup`** in a browser on
 
 - **If you signed up for Plaud with Apple or Google:**
   1. Drag the **Send Plaud to Claude** button to your bookmarks bar.
-  2. Sign in at [web.plaud.ai](https://web.plaud.ai) as usual, then click the bookmark. It brings your Plaud sign-in back to the setup page.
+  2. Sign in at [web.plaud.ai](https://web.plaud.ai) as usual, then click the bookmark. It brings your Plaud sign-in back to the setup page. (It reads Plaud's current web session, `pld_session`.)
   3. Enter your connector password and click **Connect Plaud**.
 - **If you signed up with email:** enter your email, click **Email me a code**, then enter the code.
 
@@ -80,7 +80,7 @@ The audio streams from Plaud straight to the speech-to-text engine and is never 
 
 | Engine | How | Cost |
 |---|---|---|
-| **Deepgram Nova-3 on Workers AI** (default) | Built into your Cloudflare account, with no key. Labels speakers. **English.** | About $0.005 per audio minute (≈ $0.31 per hour). The free Workers AI allowance covers roughly 20 minutes a day |
+| **Deepgram Nova-3 on Workers AI** (default) | Built into your Cloudflare account, with no key. Labels speakers. **English.** When Nova-3 refuses a recording's format (it rejects the Ogg Opus audio of Plaud 4.0 accounts), the connector falls back to **Whisper large-v3-turbo**, also on Workers AI: many languages, no speaker labels. Each transcript says which engine made it | Nova-3: about $0.005 per audio minute (≈ $0.31 per hour); Whisper costs less. The free Workers AI allowance covers roughly 20 minutes of Nova-3 a day |
 | **OpenAI-compatible Whisper** | Set `TRANSCRIBE_PROVIDER` to `openai` in `wrangler.jsonc`, plus `TRANSCRIBE_BASE_URL` and `TRANSCRIBE_MODEL` (for example Groq's `https://api.groq.com/openai/v1` with `whisper-large-v3-turbo`), and `npx wrangler secret put TRANSCRIBE_API_KEY`. Many languages. Uploads are capped at about 25 MB, which is roughly 25–50 minutes of audio | Your provider's price |
 | Off | Set `TRANSCRIBE_PROVIDER` to `off`: Plaud's transcripts only | — |
 
@@ -102,7 +102,7 @@ Everything else stays the same.
 
 - **Connecting Claude** uses OAuth 2.1 with PKCE, via [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). Tokens are stored only as hashes.
 - **Your password protects every connection.** Each new connection and every action on `/setup` needs your `OWNER_PASSWORD`. Wrong passwords are rate-limited to 8 tries per 15 minutes per IP.
-- **The Plaud sign-in** is stored in your Cloudflare D1 database. **Disconnect Plaud** on `/setup` deletes it. Plaud sign-ins last about 300 days; reconnect when the setup page says so.
+- **The Plaud sign-in** is stored in your Cloudflare D1 database. **Disconnect Plaud** on `/setup` deletes it. Plaud's website (since September 2026) signs in with a short-lived workspace token plus a refresh token. The connector renews it on its own every sync and saves each new pair, so it stays connected as long as the 30-minute sync keeps running. If Plaud ends the session (for example after you sign out everywhere), the setup page and Claude say so: click the bookmark on web.plaud.ai again.
 - **Your account only:** everything lives in your own Cloudflare account. Nothing passes through the authors of this project.
 - **Custom domain:** to keep the connector on one domain, set `PUBLIC_ORIGIN` (for example `https://notes.example.com`) as a variable. Requests for any other hostname are then refused.
 

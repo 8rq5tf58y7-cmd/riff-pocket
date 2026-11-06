@@ -11,7 +11,7 @@
 import { AuthorizationError, OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { mcpFetch, SERVER_VERSION } from "./mcp";
 import { consentPage, landingPage, messagePage, setupPage, type SetupView } from "./pages";
-import { connectToken, PlaudBlocked, sendCode, tokenExpiry, verifyCode, type PlaudCreds } from "./plaud";
+import { connectToken, credsExpiry, PlaudBlocked, plaudConnected, sendCode, verifyCode, type PlaudCreds } from "./plaud";
 import { pruneNotes, setSetting, getSetting, upsertFolder, upsertNote, type DeskNote } from "./store";
 import { syncPlaud, type SyncResult } from "./sync";
 import { engineLabel } from "./transcribe";
@@ -131,7 +131,7 @@ async function setupView(env: Env, origin: string, extra: Partial<SetupView> = {
   const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
   return {
     origin, nonce, notes: count?.n ?? 0,
-    plaud: { connected: !!creds?.userToken, apiBase: creds?.apiBase, expires: creds?.userToken ? tokenExpiry(creds.userToken) : null },
+    plaud: { connected: plaudConnected(creds), apiBase: creds?.apiBase, expires: credsExpiry(creds), session: !!creds?.session },
     sync: await getSetting<SyncResult>(env.DB, "plaudSync"),
     transcription: engineLabel(env),
     ...extra,

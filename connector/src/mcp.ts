@@ -3,9 +3,9 @@
  * Claude reaches it from claude.ai, the desktop app and the iPhone/Android apps.
  */
 import { noteIdForPlaud } from "./ids";
-import { Plaud, PlaudBlocked, PlaudError, type PlaudCreds } from "./plaud";
+import { Plaud, PlaudBlocked, PlaudError, plaudConnected, type PlaudCreds } from "./plaud";
 import { clock, getNote, getSetting, listFolders, recentNotes, searchNotes, upsertNote, type DeskNote, type NoteRow } from "./store";
-import { syncPlaud, transcribeNote, type SyncResult } from "./sync";
+import { openPlaud, syncPlaud, transcribeNote, type SyncResult } from "./sync";
 import { engineLabel, provider, type TranscribeEnv } from "./transcribe";
 
 export const SERVER_VERSION = "0.1.0";
@@ -203,10 +203,10 @@ function preview(row: NoteRow): string {
 
 async function plaudClient(env: Env): Promise<Plaud> {
   const creds = await getSetting<PlaudCreds>(env.DB, "plaud");
-  if (!creds?.userToken) {
+  if (!plaudConnected(creds)) {
     throw new ToolError("Plaud isn't connected to this connector yet. Open the connector's /setup page in a browser to connect it.");
   }
-  return new Plaud(creds, env.PLAUD_API_OVERRIDE);
+  return openPlaud(env, creds!);
 }
 
 async function callTool(env: Env, name: string, a: Json): Promise<string> {

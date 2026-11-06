@@ -17,7 +17,25 @@ export const REGIONS: Record<string, string> = {
   china: "https://api.plaud.cn",
 };
 
-export interface PlaudCreds { userToken: string; apiBase?: string; workspaceId?: string | null }
+/**
+ * Either a long-lived user token (email sign-in, older web app), or the Plaud 4.0 web
+ * session that web.plaud.ai keeps since September 2026 for every sign-in method: a
+ * short-lived workspace token plus a rotating workspace refresh token. The session is
+ * renewed with POST /user-app/auth/workspace/refresh/{workspace} (as worked out and
+ * verified live by ckelsoe/obsidian-plaud-importer), and every renewal is saved.
+ */
+export interface PlaudCreds {
+  userToken?: string;
+  apiBase?: string;
+  workspaceId?: string | null;
+  session?: { workspaceToken: string; refreshToken: string; deviceId?: string | null };
+}
+export const plaudConnected = (c: PlaudCreds | null | undefined): boolean => !!(c?.userToken || c?.session);
+/** When the sign-in stops working unless renewed: the refresh token's expiry for a session. */
+export function credsExpiry(c: PlaudCreds | null | undefined): number | null {
+  if (c?.session) return tokenExpiry(c.session.refreshToken);
+  return c?.userToken ? tokenExpiry(c.userToken) : null;
+}
 export interface PlaudRecording {
   id: string;
   title: string;
@@ -35,8 +53,9 @@ export class PlaudBlocked extends PlaudError {}
 
 const migrated = (b: any) => b?.status === MIGRATED || /migrated to 4\.0/i.test(String(b?.msg ?? ""));
 
-function headers(bearer?: string): Record<string, string> {
+function headers(bearer?: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
+    ...extra,
     ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
     "Content-Type": "application/json",
     "User-Agent": UA,
@@ -87,6 +106,9 @@ export function cleanUserToken(raw: string): string {
   if (c && (typeof c.ut_ref === "string" || typeof c.wid === "string")) {
     throw new PlaudError("That's a short-lived workspace token (~24 h). Use the bookmarklet, or copy localStorage 'pld_tokenstr' on web.plaud.ai instead of an Authorization header.");
   }
+  if (c && typeof c.exp !== "number" && (c.email || c.name)) {
+    throw new PlaudError("That's Plaud's profile token, not its sign-in. Drag the newest Send Plaud to Claude button from this page to your bookmarks, then click it on web.plaud.ai.");
+  }
   if (c && typeof c.exp === "number" && c.exp * 1000 < Date.now()) throw new PlaudError("This Plaud token has expired. Sign in to web.plaud.ai again.");
   return t;
 }
@@ -123,20 +145,64 @@ export async function verifyCode(code: string, otpToken: string, apiBase: string
 
 /** Validates a user token, trying the preferred region first. Returns working credentials. */
 export async function connectToken(rawToken: string, preferred?: string, override?: string): Promise<{ creds: PlaudCreds; recordings: number }> {
+  if (rawToken.trim().startsWith("{")) return connectSession(rawToken, override);
   const userToken = cleanUserToken(rawToken);
   const bases = Array.from(new Set([preferred && REGIONS[preferred] ? REGIONS[preferred] : preferred, ...Object.values(REGIONS)].filter(Boolean) as string[]));
-  let last: unknown = null;
+  const answers: string[] = [];
   for (const apiBase of override ? [REGIONS.global] : bases) {
+    let plaud: Plaud | undefined;
     try {
-      const plaud = new Plaud({ userToken, apiBase }, override);
+      plaud = new Plaud({ userToken, apiBase }, override);
       const recs = await plaud.recent(5);
-      return { creds: { userToken, apiBase, workspaceId: plaud.workspaceId ?? null }, recordings: recs.length };
+      return { creds: { userToken, apiBase: plaud.apiBase, workspaceId: plaud.workspaceId ?? null }, recordings: recs.length };
     } catch (e) {
       if (e instanceof PlaudBlocked) throw e; // same for every region
-      last = e;
+      const note = plaud?.workspaceNote ? ` (${plaud.workspaceNote})` : "";
+      answers.push(`${new URL(apiBase).host}: ${e instanceof Error ? e.message : String(e)}${note}`);
     }
   }
-  throw last instanceof Error ? last : new PlaudError("Plaud didn't accept that token in any region.");
+  // Names only, never values: tells a Plaud sign-in apart from some other site's token.
+  const fields = Object.keys(jwtClaims(userToken) ?? {}).join(", ") || "none";
+  throw new PlaudError(`Plaud didn't accept that token. Plaud's answers: ${answers.join("; ")}. Token fields: ${fields}.`);
+}
+
+/**
+ * Connects with the Plaud 4.0 web session the bookmarklet reads from web.plaud.ai
+ * (pld_session.workspace + pld_session.tokens): {workspaceId, domain, token, refreshToken, deviceId}.
+ */
+export async function connectSession(raw: string, override?: string): Promise<{ creds: PlaudCreds; recordings: number }> {
+  let s: any;
+  try { s = JSON.parse(raw); } catch { throw new PlaudError("That Plaud session couldn't be read. Click the bookmark on web.plaud.ai again."); }
+  const jwt = (t: unknown) => typeof t === "string" && t.split(".").length === 3 ? t.trim() : null;
+  const token = jwt(s?.token), refreshToken = jwt(s?.refreshToken);
+  const workspaceId = typeof s?.workspaceId === "string" && s.workspaceId ? s.workspaceId : (token ? jwtClaims(token)?.wid : null);
+  if (!token || !refreshToken || !workspaceId) {
+    throw new PlaudError("The Plaud session is incomplete. Open web.plaud.ai, make sure your recordings show, and click the bookmark again.");
+  }
+  const exp = tokenExpiry(refreshToken);
+  if (exp && exp * 1000 < Date.now()) throw new PlaudError("This Plaud session has expired. Sign in to web.plaud.ai again, then click the bookmark.");
+  let domain = typeof s?.domain === "string" ? s.domain.trim() : "";
+  if (domain && !/^https?:\/\//.test(domain)) domain = `https://${domain}`;
+  const creds: PlaudCreds = {
+    apiBase: baseFor(domain || REGIONS.global, override),
+    workspaceId,
+    session: { workspaceToken: token, refreshToken, deviceId: typeof s?.deviceId === "string" && s.deviceId ? s.deviceId : null },
+  };
+  const plaud = new Plaud(creds, override);
+  const recs = await plaud.recent(5);
+  return { creds, recordings: recs.length };
+}
+
+/** The audio format from a file's first bytes, or null when unrecognised. */
+export function sniffAudio(b: Uint8Array): string | null {
+  const at = (i: number, s: string) => [...s].every((ch, k) => b[i + k] === ch.charCodeAt(0));
+  if (at(0, "OggS")) return "audio/ogg";
+  if (at(0, "RIFF") && at(8, "WAVE")) return "audio/wav";
+  if (at(4, "ftyp")) return "audio/mp4";
+  if (at(0, "fLaC")) return "audio/flac";
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "audio/webm";
+  if (at(0, "ID3") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return "audio/mpeg";
+  return null;
 }
 
 // ---------------------------------------------------------------- client
@@ -148,19 +214,78 @@ export class Plaud {
   private detailCache = new Map<string, any>();
   workspaceId?: string | null;
   private creds: PlaudCreds;
+  private override?: string;
+  /** Why the workspace-token step failed, if it did (for setup diagnostics). */
+  workspaceNote?: string;
 
-  constructor(creds: PlaudCreds, override?: string) {
+  private persist?: (creds: PlaudCreds) => Promise<void>;
+  private refreshing?: Promise<string>;
+
+  /** `persist` saves renewed session tokens: Plaud's refresh token rotates, so the newest must be kept. */
+  constructor(creds: PlaudCreds, override?: string, persist?: (creds: PlaudCreds) => Promise<void>) {
     this.creds = creds;
+    this.override = override;
+    this.persist = persist;
     this.base = baseFor(creds.apiBase, override);
     this.workspaceId = creds.workspaceId;
+    if (creds.session) this.v4 = true; // a 4.0 web session only speaks the 4.0 API
+  }
+
+  /** The workspace-scope headers Plaud 4.0's web app sends with a session. */
+  private scopeHeaders(bearer: string): Record<string, string> {
+    const s = this.creds.session;
+    if (!s || !this.workspaceId) return {};
+    const platform = String(jwtClaims(bearer)?.client_id ?? "web") || "web";
+    return {
+      "app-platform": platform, "edit-from": platform, "app-language": "en",
+      "x-scope-type": "workspace", "x-scope-id": this.workspaceId,
+      ...(s.deviceId ? { "x-device-id": s.deviceId } : {}),
+    };
+  }
+
+  /** Renews the session's workspace token with its refresh token and saves the rotated pair. */
+  private async refreshSession(): Promise<string> {
+    this.refreshing ??= (async () => {
+      const s = this.creds.session!;
+      const r = await parse(await fetch(`${this.base}/user-app/auth/workspace/refresh/${encodeURIComponent(this.workspaceId ?? "")}`, {
+        method: "POST", body: "{}", headers: headers(s.refreshToken, this.scopeHeaders(s.workspaceToken)),
+      }));
+      const wt = r?.data?.workspace_token;
+      if (r?.status !== 0 || typeof wt !== "string") {
+        throw new PlaudError(`Plaud ended this sign-in (${r?.msg || `status ${r?.status}`}). Open web.plaud.ai, then click the Send Plaud to Claude bookmark again.`);
+      }
+      s.workspaceToken = wt;
+      if (typeof r.data.refresh_token === "string" && r.data.refresh_token) s.refreshToken = r.data.refresh_token;
+      await this.persist?.(this.creds);
+      return wt;
+    })().finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
   }
 
   private async call(path: string, bearer: string, init: RequestInit = {}): Promise<any> {
-    return parse(await fetch(`${this.base}/${path.replace(/^\//, "")}`, { ...init, headers: headers(bearer) }));
+    const go = async () => parse(await fetch(`${this.base}/${path.replace(/^\//, "")}`, { ...init, headers: headers(bearer, this.scopeHeaders(bearer)) }));
+    const body = await go();
+    // Wrong region: Plaud answers -302 with the account's API host. Follow it once.
+    const api = body?.status === -302 ? body?.data?.domains?.api : null;
+    if (api && !this.override) {
+      try { this.base = baseFor(String(api)); } catch { return body; }
+      this.creds.apiBase = this.base;
+      return go();
+    }
+    return body;
   }
 
+  /** The API host in use (it can change after a region redirect). */
+  get apiBase(): string { return this.base; }
+
   private async token(): Promise<string> {
+    const s = this.creds.session;
+    if (s) {
+      const exp = tokenExpiry(s.workspaceToken);
+      return exp && exp * 1000 > Date.now() + 5 * 60_000 ? s.workspaceToken : this.refreshSession();
+    }
     if (this.wt) return this.wt;
+    if (!this.creds.userToken) throw new PlaudError("Plaud isn't connected yet. Open the connector's setup page.");
     try {
       if (!this.workspaceId) {
         const r = await this.call("team-app/workspaces/list?need_personal_workspace=true", this.creds.userToken);
@@ -170,16 +295,29 @@ export class Plaud {
       if (this.workspaceId) {
         const r = await this.call(`user-app/auth/workspace/token/${encodeURIComponent(this.workspaceId)}`, this.creds.userToken, { method: "POST", body: "{}" });
         this.wt = r?.data?.workspace_token;
+        if (!this.wt) this.workspaceNote = `workspace token: ${r?.msg ?? r?.status ?? "none returned"}`;
+      } else {
+        this.workspaceNote = "no workspace found";
       }
     } catch (e) {
       if (e instanceof PlaudBlocked) throw e;
+      this.workspaceNote = `workspace step: ${e instanceof Error ? e.message : String(e)}`;
     }
     this.wt ||= this.creds.userToken; // fallback, as Riffado does
     return this.wt;
   }
 
   private async data(path: string, init?: RequestInit) {
-    return this.call(path, await this.token(), init);
+    if (!this.creds.session) return this.call(path, await this.token(), init);
+    // A session token can be revoked early (status -419 or HTTP 401): renew once and retry.
+    let r: any;
+    try {
+      r = await this.call(path, await this.token(), init);
+      if (r?.status !== -419) return r;
+    } catch (e) {
+      if (!(e instanceof PlaudError) || e instanceof PlaudBlocked || !/rejected the sign-in/.test(e.message)) throw e;
+    }
+    return this.call(path, await this.refreshSession(), init);
   }
 
   /** Most recent recordings, newest first (pages through Plaud 4.0's cursor listing). */
@@ -245,16 +383,31 @@ export class Plaud {
     throw new PlaudError("Plaud has no downloadable audio for this recording yet.");
   }
 
-  /** Opens the audio as a stream (never buffered in the Worker) with its content type. */
-  async audio(id: string): Promise<{ body: ReadableStream; contentType: string }> {
+  /** Opens the audio as a stream (never buffered in the Worker) with its content type, plus a short description for errors. */
+  async audio(id: string): Promise<{ body: ReadableStream; contentType: string; info: string }> {
     const url = await this.audioUrl(id);
     const res = await fetch(url, { headers: { "User-Agent": UA } });
     if (!res.ok || !res.body) throw new PlaudError(`Couldn't download the audio (HTTP ${res.status}).`);
+    // Plaud 4.0 serves Ogg Opus from presigned links with no audio type or extension, so the
+    // file's first bytes decide; the header and extension are only a fallback.
+    const reader = res.body.getReader();
+    const first = await reader.read();
+    const head = first.value ?? new Uint8Array();
     const header = (res.headers.get("content-type") ?? "").split(";")[0].trim();
     const ext = new URL(url).pathname.split(".").pop()?.toLowerCase() ?? "";
     const byExt: Record<string, string> = { mp3: "audio/mpeg", m4a: "audio/mp4", mp4: "audio/mp4", ogg: "audio/ogg", opus: "audio/ogg", wav: "audio/wav", webm: "audio/webm" };
-    const contentType = header.startsWith("audio/") ? header : byExt[ext] ?? "audio/mpeg";
-    return { body: res.body, contentType };
+    const sniffed = sniffAudio(head);
+    const contentType = sniffed ?? (header.startsWith("audio/") ? header : byExt[ext] ?? "audio/mpeg");
+    const start = head.slice(0, 12);
+    const info = `sent as ${contentType} (from ${sniffed ? "file bytes" : "fallback"}); server said ${header || "no type"}, `
+      + `${res.headers.get("content-length") ?? "unknown"} bytes, .${ext || "no extension"}; starts `
+      + `${[...start].map((x) => x.toString(16).padStart(2, "0")).join(" ")} "${String.fromCharCode(...start).replace(/[^\x20-\x7e]/g, ".")}"`;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { if (head.length) c.enqueue(head); if (first.done) c.close(); },
+      async pull(c) { const { value, done } = await reader.read(); if (done) c.close(); else c.enqueue(value); },
+      cancel(reason) { return reader.cancel(reason); },
+    });
+    return { body, contentType, info };
   }
 
   private async fetchContent(link: string): Promise<any> {

@@ -61,7 +61,7 @@ export interface SetupView {
   origin: string;
   nonce: string;
   notes: number;
-  plaud: { connected: boolean; apiBase?: string; expires?: number | null };
+  plaud: { connected: boolean; apiBase?: string; expires?: number | null; session?: boolean };
   sync?: { at: number; listed: number; added: number; updated: number; pending: number; transcribed?: number; toTranscribe?: number; blocked?: boolean; error?: string } | null;
   transcription: string;
   message?: { text: string; ok: boolean };
@@ -69,11 +69,36 @@ export interface SetupView {
   otp?: { otpToken: string; apiBase: string; email: string };
 }
 
+/**
+ * The "Send Plaud to Claude" bookmarklet, run on web.plaud.ai. Plaud has moved where
+ * its web app keeps the sign-in, so instead of one fixed key it looks for any JWT in
+ * localStorage, sessionStorage and readable cookies (also inside JSON values), skips
+ * workspace tokens, and prefers pld_tokenstr, then a key named like a token, then the
+ * longest-lived one. When there is none it lists the key names (never values).
+ * No backslashes or newlines: it travels inside a javascript: URL.
+ */
+export function bookmarkletSource(origin: string): string {
+  return `(()=>{` +
+    // Plaud 4.0 web session (Sept 2026+): current workspace, its API domain, and its token pair.
+    `try{const w=JSON.parse(localStorage.getItem('pld_session.workspace')||'null');const id=w&&w.currentId;` +
+    `const tk=JSON.parse(localStorage.getItem('pld_session.tokens')||'null');const e=id&&tk&&tk.byWsId&&tk.byWsId[id];` +
+    `if(e&&e.token&&e.refreshToken){let d=null;const l=w.list||{};for(const k in l){const x=l[k];if(x&&x.workspaceId===id&&x.domain)d=x.domain}` +
+    `const S={workspaceId:id,domain:d,token:e.token,refreshToken:e.refreshToken,deviceId:String(localStorage.getItem('pld_DEVICE_ID')||'').replace(/^"|"$/g,'')};` +
+    `location.href=${JSON.stringify(origin + "/setup#session=")}+encodeURIComponent(JSON.stringify(S))+'&from=pld_session';return}}catch(err){}` +
+    `const J=/eyJ[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+/g;` +
+    `const C=t=>{try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')))}catch(e){return null}};` +
+    `const F=[];const add=(k,v)=>((v||'').match(J)||[]).forEach(t=>F.push({k,t,c:C(t)}));` +
+    `for(const s of [localStorage,sessionStorage]){for(let i=0;i<s.length;i++){const k=s.key(i);add(k,s.getItem(k))}}` +
+    `document.cookie.split(';').forEach(p=>{const i=p.indexOf('=');add(p.slice(0,i).trim(),decodeURIComponent(p.slice(i+1)))});` +
+    `const ok=F.filter(f=>f.c&&typeof f.c.exp==='number'&&!f.c.wid&&!f.c.ut_ref);` +
+    `const p=ok.find(f=>/pld_tokenstr|pld_ut/i.test(f.k))||ok.filter(f=>/token/i.test(f.k)).sort((a,b)=>(b.c.exp||0)-(a.c.exp||0))[0]||ok.sort((a,b)=>(b.c.exp||0)-(a.c.exp||0))[0];` +
+    `if(!p){alert('No Plaud sign-in this button can read on '+location.host+'. Plaud may keep it in a protected cookie: use the Copy it from Firefox or Chrome steps on the setup page instead. Saved names here: '+[...Object.keys(localStorage),...Object.keys(sessionStorage),...document.cookie.split(';').map(c=>c.split('=')[0].trim())].filter(Boolean).join(', ').slice(0,700));return}` +
+    `location.href=${JSON.stringify(origin + "/setup#token=")}+encodeURIComponent(p.t)+'&from='+encodeURIComponent(p.k)})()`;
+}
+
 export function setupPage(v: SetupView): Response {
   const when = (s: number) => new Date(s * 1000).toUTCString().replace(" GMT", " UTC");
-  const bookmarklet =
-    `javascript:(()=>{const t=localStorage.getItem('pld_tokenstr');if(!t){alert('Sign in to web.plaud.ai first, then click this again.');return}` +
-    `location.href=${JSON.stringify(v.origin + "/setup#token=")}+encodeURIComponent(t.replace(/^"|"$/g,''))})()`;
+  const bookmarklet = "javascript:" + bookmarkletSource(v.origin);
   const sync = v.sync;
   const status = !v.plaud.connected
     ? `<p class="warn">Plaud isn't connected yet.</p>`
@@ -105,7 +130,16 @@ export function setupPage(v: SetupView): Response {
         <li>Drag this button to your browser's bookmarks bar: <a class="bm" href="${esc(bookmarklet)}">Send Plaud to Claude</a></li>
         <li>Sign in at <a href="https://web.plaud.ai" target="_blank" rel="noopener">web.plaud.ai</a> on a computer, then click the bookmark. It brings you back here with your token filled in.</li>
       </ol>
-      <textarea id="token" name="token" placeholder="…or paste the value of localStorage pld_tokenstr from web.plaud.ai"></textarea>
+      <details><summary>Copy it from Firefox or Chrome instead</summary>
+        <ol class="muted">
+          <li>On <b>web.plaud.ai</b>, signed in, press <b>F12</b>.</li>
+          <li>Firefox: open the <b>Storage</b> tab. Chrome or Edge: open <b>Application</b>.</li>
+          <li>Under <b>Cookies</b>, click the plaud.ai entry and find <b>pld_ut</b>. If it isn't there, look under <b>Local Storage</b> for <b>pld_tokenstr</b>.</li>
+          <li>Double-click its <b>Value</b>, copy it (it starts with <code>eyJ</code>), and paste it below.</li>
+        </ol>
+      </details>
+      <textarea id="token" name="token" placeholder="…or paste your Plaud sign-in token (it starts with eyJ) from web.plaud.ai"></textarea>
+      <p id="tokfrom" class="muted"></p>
       <label class="muted">Region</label>
       <select name="region"><option value="">Detect automatically</option><option value="global">Global (api.plaud.ai)</option><option value="eu">EU (api-euc1)</option><option value="apac">Asia Pacific (api-apse1)</option><option value="china">China (api.plaud.cn)</option></select>
       <button class="allow small" name="action" value="token">Connect Plaud</button>
@@ -127,8 +161,13 @@ export function setupPage(v: SetupView): Response {
       <li>It's then also in the Claude iPhone app. Turn on Claude's <strong>Notion</strong> connector to save notes to Notion.</li></ol>
   </main>
   <script nonce="${esc(v.nonce)}">
-    const m = location.hash.match(/token=([^&]+)/);
-    if (m) { document.getElementById('token').value = decodeURIComponent(m[1]); history.replaceState(null, '', location.pathname); document.getElementById('pw').focus(); }
+    const m = location.hash.match(/(?:token|session)=([^&]+)/);
+    const f = location.hash.match(/from=([^&]+)/);
+    if (m) {
+      document.getElementById('token').value = decodeURIComponent(m[1]);
+      if (f) document.getElementById('tokfrom').textContent = 'Found in web.plaud.ai saved data: ' + decodeURIComponent(f[1]);
+      history.replaceState(null, '', location.pathname); document.getElementById('pw').focus();
+    }
   </script></body></html>`;
   return new Response(html, {
     headers: {

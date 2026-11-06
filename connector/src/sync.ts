@@ -1,8 +1,13 @@
 /** Pulls Plaud recordings (with Plaud's transcripts and AI summaries) into D1 so Claude's searches are instant. */
 import { noteIdForPlaud } from "./ids";
-import { Plaud, PlaudBlocked, type PlaudCreds } from "./plaud";
+import { Plaud, PlaudBlocked, plaudConnected, type PlaudCreds } from "./plaud";
 import { getNote, getSetting, setSetting, upsertNote, type DeskNote } from "./store";
 import { engineLabel, provider, transcribe, type TranscribeEnv } from "./transcribe";
+
+/** A Plaud client that saves renewed session tokens back to the database. */
+export function openPlaud(env: { DB: D1Database; PLAUD_API_OVERRIDE?: string }, creds: PlaudCreds): Plaud {
+  return new Plaud(creds, env.PLAUD_API_OVERRIDE, (c) => setSetting(env.DB, "plaud", c));
+}
 
 export interface SyncEnv extends TranscribeEnv { DB: D1Database; PLAUD_API_OVERRIDE?: string }
 
@@ -36,12 +41,12 @@ const MAX_ATTEMPTS = 3;
 export async function syncPlaud(env: SyncEnv, contentBudget = 10, listLimit = 100, transcribeBudget = 0): Promise<SyncResult> {
   const result: SyncResult = { at: Date.now() / 1000, listed: 0, added: 0, updated: 0, pending: 0 };
   const creds = await getSetting<PlaudCreds>(env.DB, "plaud");
-  if (!creds?.userToken) {
+  if (!plaudConnected(creds)) {
     result.error = "Plaud isn't connected yet — open the connector's /setup page.";
     return result;
   }
   try {
-    const plaud = new Plaud(creds, env.PLAUD_API_OVERRIDE);
+    const plaud = openPlaud(env, creds!);
     const recs = await plaud.recent(listLimit);
     result.listed = recs.length;
     let budget = contentBudget;
@@ -120,16 +125,19 @@ async function untranscribed(db: D1Database): Promise<{ id: string; doc: StoredD
 
 /** Transcribes one recording with the connector's own engine and saves it. */
 export async function transcribeNote(env: SyncEnv, plaud: Plaud, doc: StoredDoc): Promise<StoredDoc> {
+  let audioInfo = "";
   try {
-    const { segments, language } = await transcribe(env, await plaud.audio(doc.plaudId!));
+    const audio = await plaud.audio(doc.plaudId!);
+    audioInfo = audio.info;
+    const { segments, language, engine } = await transcribe(env, audio);
     doc.transcript = { language, segments };
-    doc.transcriptSource = engineLabel(env);
+    doc.transcriptSource = engine ?? engineLabel(env);
     doc.transcribeError = segments.length ? null : "No speech found.";
     if (!segments.length) doc.transcribeAttempts = MAX_ATTEMPTS; // silent recording: don't retry
   } catch (e) {
     if (e instanceof PlaudBlocked) throw e;
     doc.transcribeAttempts = (doc.transcribeAttempts ?? 0) + 1;
-    doc.transcribeError = (e as Error).message;
+    doc.transcribeError = (e as Error).message + (audioInfo ? ` [audio: ${audioInfo}]` : "");
   }
   doc.updatedAt = Date.now() / 1000;
   await upsertNote(env.DB, doc);
