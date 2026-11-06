@@ -47,7 +47,7 @@ struct ModelPickerView: View {
     @State private var fetching = false
     @State private var note: String?
     @State private var customLocalId = ""
-    @State private var openRouterSignedIn = Keychain.string(AIRouter.openRouterKey) != nil
+    @State private var openRouterSignedIn = false
 
     private var kinds: [ProviderKind] {
         ProviderKind.allCases.filter { kind in
@@ -66,7 +66,7 @@ struct ModelPickerView: View {
                             Image(systemName: kind.symbol).frame(width: 22).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(kind.label).foregroundStyle(Theme.text)
-                                Text(blurb(kind)).font(.caption).foregroundStyle(Theme.secondary)
+                                Text(kind.blurb).font(.caption).foregroundStyle(Theme.secondary)
                             }
                             Spacer()
                             if config.kind == kind { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
@@ -82,16 +82,20 @@ struct ModelPickerView: View {
                         .font(.system(.body, design: .monospaced))
                 } header: { SectionLabel("Server") } footer: {
                     if config.kind == .ollama {
-                        Text("Run Ollama on your PC or Mac and reach it over Tailscale, e.g. https://my-pc.tailnet.ts.net/v1. Set OLLAMA_HOST=0.0.0.0 there.")
+                        Text("Run Ollama on your PC or Mac and reach it over Tailscale, e.g. https://my-pc.tailnet.ts.net:11434. Set OLLAMA_HOST=0.0.0.0 there. For hosted models without a computer, pick Ollama Cloud.")
                     }
                 }
             }
 
-            if config.kind.needsAPIKey && config.kind != .openRouter {
+            if config.kind.needsAPIKey {
                 Section {
                     SecureField("API key", text: $apiKey)
-                        .onChange(of: apiKey) { _, v in Keychain.setString(v, for: task.keychainKey) }
-                } header: { SectionLabel("API key") } footer: { Text("Stored in the iOS Keychain on this device.") }
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: apiKey) { _, v in AIRouter.setAPIKey(v, for: config.kind) }
+                } header: { SectionLabel("\(config.kind.shortName) API key") } footer: {
+                    Text([config.kind.keyHelp, "Stored in the iOS Keychain on this device and shared by all chats."]
+                        .compactMap { $0 }.joined(separator: " "))
+                }
             }
 
             if config.kind == .openRouter { openRouterSection }
@@ -108,7 +112,8 @@ struct ModelPickerView: View {
         .themedList()
         .navigationTitle(task == .transcribe ? "Transcription model" : "Model")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { apiKey = Keychain.string(task.keychainKey) ?? "" }
+        .onAppear(perform: loadKey)
+        .onChange(of: config.kind) { _, _ in loadKey() }
     }
 
     // MARK: Model section per source
@@ -225,23 +230,23 @@ struct ModelPickerView: View {
     private var openRouterSection: some View {
         Section {
             if openRouterSignedIn {
-                Label("Signed in to OpenRouter", systemImage: "checkmark.seal").foregroundStyle(Theme.success)
-                Button("Sign out", role: .destructive) {
-                    Keychain.delete(AIRouter.openRouterKey)
+                Label("OpenRouter key saved", systemImage: "checkmark.seal").foregroundStyle(Theme.success)
+                Button("Remove key", role: .destructive) {
+                    AIRouter.setAPIKey(nil, for: .openRouter); apiKey = ""
                     openRouterSignedIn = false
                 }
             } else {
-                Button("Sign in with OpenRouter") {
+                Button("Or sign in with OpenRouter instead") {
                     Task {
                         do {
                             let key = try await OpenRouterSignIn.signIn(using: webAuth)
-                            Keychain.setString(key, for: AIRouter.openRouterKey)
+                            AIRouter.setAPIKey(key, for: .openRouter); apiKey = key
                             openRouterSignedIn = true
                         } catch { note = errorMessage(error) }
                     }
                 }
             }
-        } header: { SectionLabel("Account") } footer: { Text("Hundreds of models, billed to your OpenRouter account.") }
+        } header: { SectionLabel("Account") } footer: { Text("Signing in creates a key for you. Usage is billed to your OpenRouter account.") }
     }
 
     // MARK: Actions
@@ -255,17 +260,9 @@ struct ModelPickerView: View {
         note = nil
     }
 
-    private func blurb(_ kind: ProviderKind) -> String {
-        switch kind {
-        case .appleOnDevice: return "Built into iOS · private · free"
-        case .mlx: return "Open models running on this iPhone"
-        case .whisperKit: return "Whisper on the Neural Engine"
-        case .ollama: return "Your own computer, over your network"
-        case .openAICompatible: return "OpenAI, Groq, Together, LM Studio…"
-        case .anthropic: return "Claude models with your API key"
-        case .openRouter: return "Sign in — no key to paste"
-        case .riffado: return "Your Riffado server"
-        }
+    private func loadKey() {
+        apiKey = AIRouter.apiKey(for: config.kind, task: task) ?? ""
+        openRouterSignedIn = AIRouter.apiKey(for: .openRouter, task: task) != nil
     }
 
     private func fetchModels() async {

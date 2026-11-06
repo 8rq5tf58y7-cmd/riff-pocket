@@ -16,7 +16,8 @@ struct RecordingDetailView: View {
     @State private var tab: DetailTab = .summary
     @State private var busy: String?
     @State private var errorText: String?
-    @State private var template: SummaryTemplate = .meeting
+    @State private var style: SummaryStyle = .meeting
+    @State private var showStyleEditor = false
     @State private var draft = ""
     @State private var chat: [ChatMessage] = []
     @State private var summaryModel: ProviderConfig?
@@ -45,7 +46,17 @@ struct RecordingDetailView: View {
         .background(Theme.background)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
-        .onAppear { player.load(recording.audioURL) }
+        .onAppear {
+            player.load(recording.audioURL)
+            style = recording.summaryStyle ?? settings.settings.defaultStyle
+        }
+        .sheet(isPresented: $showStyleEditor, onDismiss: { recording.summaryStyle = style; try? context.save() }) {
+            NavigationStack {
+                SummaryStyleEditor(style: $style, title: "Style for this note")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showStyleEditor = false } } }
+            }
+            .presentationBackground(Theme.background)
+        }
         .onDisappear { player.stop() }
         .alert("Something went wrong", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
             Button("OK", role: .cancel) {}
@@ -122,13 +133,22 @@ struct RecordingDetailView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     Menu {
-                        Picker("Template", selection: $template) {
-                            ForEach(SummaryTemplate.allCases) { Text($0.label).tag($0) }
+                        ForEach(settings.settings.allStyles) { s in
+                            Button { style = s; recording.summaryStyle = s } label: {
+                                if s.id == style.id { Label(s.name, systemImage: "checkmark") } else { Text(s.name) }
+                            }
                         }
+                        Divider()
+                        Button("Customize format & length…", systemImage: "slider.horizontal.3") { showStyleEditor = true }
                     } label: {
-                        Label(template.label, systemImage: "doc.text").font(Theme.mono)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Theme.surface, in: .capsule)
+                        HStack(spacing: 5) {
+                            Image(systemName: "doc.text").font(.system(size: 11, weight: .semibold))
+                            Text("\(style.name) · \(style.length.label)").lineLimit(1)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                        }
+                        .font(Theme.mono).foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.surface, in: .capsule)
                     }
                     ModelChip(config: summaryConfig, task: .summarize) { settings.settings.summarize = $0 }
                     Spacer()
@@ -280,7 +300,10 @@ struct RecordingDetailView: View {
         do {
             let transcriber = try AIRouter.transcriber(for: settings.settings.transcribe)
             let lang = settings.settings.language.isEmpty ? nil : settings.settings.language
-            recording.transcript = try await transcriber.transcribe(fileURL: recording.audioURL, language: lang)
+            let url = recording.audioURL
+            recording.transcript = try await BackgroundWork.withExtendedTime("Transcribe") {
+                try await transcriber.transcribe(fileURL: url, language: lang)
+            }
             recording.transcriptSource = transcriber.displayName
             try? context.save()
         } catch {
@@ -294,7 +317,11 @@ struct RecordingDetailView: View {
         defer { busy = nil }
         do {
             let model = try AIRouter.chatModel(for: summaryConfig.wrappedValue, task: .summarize)
-            recording.summary = try await Summarizer(model: model).summarize(t, template: template)
+            let chosen = style
+            recording.summary = try await BackgroundWork.withExtendedTime("Summarize") {
+                try await Summarizer(model: model).summarize(t, style: chosen)
+            }
+            recording.summaryStyle = style
             recording.summarySource = model.displayName
             try? context.save()
         } catch {

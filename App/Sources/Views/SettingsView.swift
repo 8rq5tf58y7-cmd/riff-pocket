@@ -14,6 +14,8 @@ struct SettingsView: View {
             Form {
                 plaudSection
                 modelsSection
+                summariesSection
+                backgroundSection
                 Section {
                     Toggle("Use Plaud's transcript & summary when available", isOn: $settings.settings.preferPlaudContent)
                     TextField("Language (blank = auto, e.g. en)", text: $settings.settings.language)
@@ -97,6 +99,44 @@ struct SettingsView: View {
         case .summarize: return "sparkles"
         case .chat: return "bubble.left.and.text.bubble.right"
         }
+    }
+
+    // MARK: Summaries
+
+    private var summariesSection: some View {
+        Section {
+            NavigationLink {
+                SummaryTemplatesView()
+            } label: {
+                LabeledContent {
+                    Text(settings.settings.defaultStyle.name).font(Theme.mono)
+                } label: {
+                    Label("Summary templates", systemImage: "doc.text")
+                }
+            }
+        } header: { SectionLabel("Summaries") } footer: {
+            Text("Pick the default format, length and sections for new notes, or make your own templates.")
+        }
+    }
+
+    // MARK: Background
+
+    private var backgroundSection: some View {
+        Section {
+            Toggle("Check Plaud for new recordings", isOn: $settings.settings.backgroundSync)
+            Toggle("Transcribe new notes automatically", isOn: $settings.settings.autoTranscribe)
+            Toggle("Summarize new notes automatically", isOn: $settings.settings.autoSummarize)
+            if settings.settings.autoTranscribe || settings.settings.autoSummarize {
+                Toggle("Only while charging", isOn: $settings.settings.processOnlyWhileCharging)
+            }
+            Toggle("Notify me", isOn: $settings.settings.notifications)
+                .onChange(of: settings.settings.notifications) { _, on in
+                    if on { Task { _ = await Notifier.requestPermission() } }
+                }
+        } header: { SectionLabel("While you're away") } footer: {
+            Text("iOS decides exactly when background work runs — usually while the phone is idle, and more often for apps you use regularly. Work you start keeps going briefly after you leave the app, and anything left over finishes when you come back. On-iPhone models need the screen on (iOS doesn't allow GPU work in the background), so pick Apple, Ollama or an API model for summaries that should finish while you're away. Keep Background App Refresh on for Riff Pocket in iOS Settings.")
+        }
+        .onChange(of: settings.settings.backgroundSync) { _, _ in BackgroundWork.scheduleRefresh() }
     }
 
     // MARK: Riffado

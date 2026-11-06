@@ -1,37 +1,5 @@
 import Foundation
 
-public enum SummaryTemplate: String, CaseIterable, Codable, Sendable, Identifiable {
-    case meeting, lecture, call, oneOnOne, general
-
-    public var id: String { rawValue }
-
-    public var label: String {
-        switch self {
-        case .meeting: return "Meeting"
-        case .lecture: return "Lecture"
-        case .call: return "Call"
-        case .oneOnOne: return "1:1"
-        case .general: return "General"
-        }
-    }
-
-    public var instructions: String {
-        let base = "You summarize transcripts of voice recordings. Be faithful to the transcript; never invent facts. Cite times like [00:12:34] when useful. Use Markdown."
-        switch self {
-        case .meeting:
-            return base + " Output: ## Summary (3-5 sentences), ## Key decisions, ## Action items (owner — task — due if stated), ## Open questions."
-        case .lecture:
-            return base + " Output: ## Overview, ## Key concepts (bullets with short explanations), ## Definitions, ## Things to review."
-        case .call:
-            return base + " Output: ## Purpose, ## What was discussed, ## Commitments, ## Follow-ups."
-        case .oneOnOne:
-            return base + " Output: ## Highlights, ## Concerns raised, ## Feedback, ## Next steps."
-        case .general:
-            return base + " Output: ## Summary, ## Key points, ## Action items (if any)."
-        }
-    }
-}
-
 /// Chunked map-reduce summarization so small on-device models (≈4k tokens) handle hour-long recordings.
 public struct Summarizer: Sendable {
     public var model: any ChatModel
@@ -78,8 +46,8 @@ public struct Summarizer: Sendable {
         chunk(lines: transcript.timestampedLines, maxCharacters: maxCharacters)
     }
 
-    public func summarize(_ transcript: Transcript, template: SummaryTemplate, customPrompt: String? = nil) async throws -> String {
-        let instructions = customPrompt.map { template.instructions + "\nAdditional instructions: \($0)" } ?? template.instructions
+    /// Summarize with any system instructions (see `SummaryStyle.instructions`).
+    public func summarize(_ transcript: Transcript, instructions: String) async throws -> String {
         let budget = max(1_000, model.contextCharacterBudget)
         let chunks = Self.chunk(transcript, maxCharacters: budget)
 

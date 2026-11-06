@@ -3,12 +3,21 @@ import SwiftData
 
 @main
 struct RiffPocketApp: App {
-    @StateObject private var settings = SettingsStore()
+    @StateObject private var settings = SettingsStore.shared
     @StateObject private var account = PlaudAccount()
     @StateObject private var sync = SyncService()
+    @Environment(\.scenePhase) private var scenePhase
+    private let container: ModelContainer
 
     init() {
         Theme.applyAppearance()
+        do {
+            container = try ModelContainer(for: RecordingItem.self, Folder.self)
+        } catch {
+            fatalError("Couldn't open the notes database: \(error)")
+        }
+        // Background tasks must be registered before launch finishes.
+        BackgroundWork.register(container: container)
     }
 
     var body: some Scene {
@@ -20,7 +29,19 @@ struct RiffPocketApp: App {
                 .tint(Theme.accent)
                 .foregroundStyle(Theme.text)
         }
-        .modelContainer(for: [RecordingItem.self, Folder.self])
+        .modelContainer(container)
+        .onChange(of: scenePhase) { _, phase in
+            let context = container.mainContext
+            switch phase {
+            case .background:
+                BackgroundWork.scheduleAll(context: context)
+            case .active:
+                // Catch up on anything the background couldn't finish (e.g. on-iPhone MLX summaries).
+                Task { await BackgroundWork.processPending(context: context, inBackground: false) }
+            default:
+                break
+            }
+        }
     }
 }
 
