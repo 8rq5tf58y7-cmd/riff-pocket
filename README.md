@@ -87,18 +87,32 @@ No special entitlements are needed, so a free Apple ID works.
 
 Use console logs through the Sideloadly/3uTools device console, error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
 
-## AI providers
+## Features
+
+- **Notes:** recordings synced from Plaud, mic recordings, or imported files. They're grouped by day, searchable, and can be sorted into **folders**.
+- **Per-note tabs:** Summary (with templates), timestamped Transcript (tap a line to jump the audio there), and Ask (chat about that one note).
+- **Chat tab (Library chat):** ask across **all notes**, **Unfiled**, or **one folder**. Long collections are handled by picking the most relevant excerpts and citing which note each answer came from.
+- **Model chip on every chat and summary:** switch the **source** and **model** on the fly. You can also set it as the default.
+- **Plaud 4.0 accounts:** these are detected automatically (status `-1800907`) and switched to the `/file-app/v4` API. This is ported from Riffado PR #328.
+- **Look:** warm ivory and charcoal surfaces, terracotta accent, serif headings, chat-style composer. Follows light and dark mode.
+
+## AI sources
 
 | Task | Options |
 |---|---|
 | Transcription | Plaud's own · **WhisperKit** on the phone · OpenAI/Groq Whisper (API key) · Ollama-compatible Whisper server |
-| Summaries / Ask | Plaud's own summary · **Apple Foundation Models** on the phone · **Ollama** (over Tailscale) · OpenAI-compatible (API key) · **Anthropic** (API key) · **OpenRouter** (sign in) |
+| Summaries / Ask / Chat | Plaud's own summary · **Apple Foundation Models** · **Local models on the iPhone (MLX)** · **Ollama** (over Tailscale) · OpenAI-compatible (API key) · **Anthropic** (API key) · **OpenRouter** (sign in) |
+
+**Local models (MLX):** download from the model picker or Settings → Local models.
+- **Recommended:** Qwen3 1.7B (≈1 GB, default), Gemma 3 1B, Llama 3.2 3B, Phi-3.5 mini, Qwen3 4B.
+- **Others:** any `mlx-community/…` model ID from Hugging Face. Up to about 4B parameters works well on an iPhone 16.
+- **Privacy:** everything runs on the device, and only one model is loaded at a time.
 
 ## Status
 
 Scaffold.
-- **RiffCore** (Plaud client, auth, sync planning, AI clients, summarizer) builds, and all 16 tests pass on Swift 6.4.2 (Linux/WSL).
-- **The iOS app target** hasn't been compiled yet, because it needs the iOS SDK. The first CI run will surface any errors.
+- **RiffCore** (Plaud client incl. 4.0, auth, sync planning, AI clients, summarizer, Library chat context) builds, and all 23 tests pass on Swift 6.4.2 (Linux/WSL).
+- **The iOS app** compiles in CI with no warnings (49 MB app, including MLX and WhisperKit). It has not been tested on a device yet.
 
 Known gaps:
 - The Riffado `connect-token` call needs a Riffado session. Check whether your Riffado version accepts API keys there.
