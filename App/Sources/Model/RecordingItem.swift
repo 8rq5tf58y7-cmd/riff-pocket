@@ -25,6 +25,10 @@ final class RecordingItem {
     var summary: String?
     var summarySource: String?
     var folder: Folder?
+    /// This note's summary style (format, length, sections…). nil = the default template.
+    var summaryStyleData: Data?
+    /// Set by background processing so it doesn't retry a failing note forever.
+    var autoProcessFailures: Int = 0
 
     init(title: String, createdAt: Date = .now, duration: Double, audioFileName: String, source: String) {
         self.id = UUID()
@@ -36,6 +40,11 @@ final class RecordingItem {
     }
 
     var audioURL: URL { RecordingStorage.directory.appendingPathComponent(audioFileName) }
+
+    var summaryStyle: SummaryStyle? {
+        get { summaryStyleData.flatMap { try? JSONDecoder().decode(SummaryStyle.self, from: $0) } }
+        set { summaryStyleData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+    }
 
     var transcript: Transcript? {
         get { transcriptData.flatMap { try? JSONDecoder().decode(Transcript.self, from: $0) } }

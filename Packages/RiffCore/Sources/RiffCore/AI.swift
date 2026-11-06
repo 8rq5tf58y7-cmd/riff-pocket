@@ -46,10 +46,11 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable 
     case appleOnDevice      // Foundation Models (chat) / SpeechAnalyzer (transcribe)
     case mlx                // open-weight LLMs running on the iPhone (MLX, Hugging Face downloads)
     case whisperKit         // on-device Whisper on the Neural Engine
-    case ollama             // your own machine, OpenAI-compatible endpoint
+    case ollama             // your own machine (native Ollama API)
+    case ollamaCloud        // ollama.com hosted models (API key)
     case openAICompatible   // OpenAI, Groq, Together, LM Studio, … (API key)
     case anthropic          // Claude (API key)
-    case openRouter         // sign in with OpenRouter (OAuth PKCE) or key
+    case openRouter         // OpenRouter: API key or sign in (OAuth PKCE)
     case riffado            // let your Riffado server do it
 
     public var id: String { rawValue }
@@ -59,18 +60,20 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable 
         case .appleOnDevice: return "Apple on-device"
         case .mlx: return "Local model (on iPhone)"
         case .whisperKit: return "WhisperKit (on-device)"
-        case .ollama: return "Ollama"
+        case .ollama: return "Ollama (your computer)"
+        case .ollamaCloud: return "Ollama Cloud"
         case .openAICompatible: return "OpenAI-compatible (API key)"
         case .anthropic: return "Anthropic (API key)"
-        case .openRouter: return "OpenRouter (sign in)"
+        case .openRouter: return "OpenRouter"
         case .riffado: return "Riffado server"
         }
     }
 
     public var canTranscribe: Bool {
         switch self {
-        case .appleOnDevice, .whisperKit, .openAICompatible, .ollama, .riffado: return true
-        case .anthropic, .openRouter, .mlx: return false
+        case .appleOnDevice, .whisperKit, .openAICompatible, .riffado: return true
+        // Ollama has no speech-to-text endpoint.
+        case .anthropic, .openRouter, .mlx, .ollama, .ollamaCloud: return false
         }
     }
 
@@ -83,9 +86,12 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable 
         }
     }
 
+    /// Keychain account for this source's key: one key per source, shared by every task.
+    public var keychainKey: String { "apikey.\(rawValue)" }
+
     public var needsAPIKey: Bool {
         switch self {
-        case .openAICompatible, .anthropic, .openRouter: return true
+        case .openAICompatible, .anthropic, .openRouter, .ollamaCloud: return true
         default: return false
         }
     }
@@ -113,7 +119,9 @@ public struct ProviderConfig: Codable, Hashable, Sendable {
             return .init(kind: kind, model: "base")
         case .ollama:
             // Reach Ollama on your PC/Mac over Tailscale, e.g. https://my-mac.tailnet.ts.net
-            return .init(kind: kind, baseURL: "http://localhost:11434/v1", model: forTranscription ? "whisper" : "llama3.2")
+            return .init(kind: kind, baseURL: "http://localhost:11434", model: "llama3.2")
+        case .ollamaCloud:
+            return .init(kind: kind, baseURL: OllamaClient.cloudHost, model: "gemma4:31b")
         case .openAICompatible:
             return .init(kind: kind, baseURL: "https://api.openai.com/v1", model: forTranscription ? "whisper-1" : "gpt-4o-mini")
         case .anthropic:

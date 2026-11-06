@@ -94,14 +94,16 @@ Use console logs through the Sideloadly/3uTools device console, error messages i
 - **Chat tab (Library chat):** ask across **all notes**, **Unfiled**, or **one folder**. Long collections are handled by picking the most relevant excerpts and citing which note each answer came from.
 - **Model chip on every chat and summary:** switch the **source** and **model** on the fly. You can also set it as the default.
 - **Plaud 4.0 accounts:** these are detected automatically (status `-1800907`) and switched to the `/file-app/v4` API. This is ported from Riffado PR #328.
+- **Summary styles:** set the format (bullets, prose, outline, Q&A), length, tone, sections, timestamps, language and your own instructions for each note. Eight built-in templates are included, you can save your own, and you can pick a default for new notes.
+- **While you're away:** background refresh syncs new Plaud recordings and notifies you. Background processing can auto-transcribe and summarize, optionally only while charging. Work you started finishes after you leave the app, and leftovers run when you return. iOS decides the timing, and on-iPhone MLX models only run in the foreground.
 - **Look:** warm ivory and charcoal surfaces, terracotta accent, serif headings, chat-style composer. Follows light and dark mode.
 
 ## AI sources
 
 | Task | Options |
 |---|---|
-| Transcription | Plaud's own · **WhisperKit** on the phone · OpenAI/Groq Whisper (API key) · Ollama-compatible Whisper server |
-| Summaries / Ask / Chat | Plaud's own summary · **Apple Foundation Models** · **Local models on the iPhone (MLX)** · **Ollama** (over Tailscale) · OpenAI-compatible (API key) · **Anthropic** (API key) · **OpenRouter** (sign in) |
+| Transcription | Plaud's own · **WhisperKit** on the phone · OpenAI/Groq Whisper (API key) |
+| Summaries / Ask / Chat | Plaud's own summary · **Apple Foundation Models** · **Local models on the iPhone (MLX)** · **Ollama** on your computer (over Tailscale) · **Ollama Cloud** (API key) · OpenAI-compatible (API key) · **Anthropic** (API key) · **OpenRouter** (API key or sign in) |
 
 **Local models (MLX):** download from the model picker or Settings → Local models.
 - **Recommended:** Qwen3 1.7B (≈1 GB, default), Gemma 3 1B, Llama 3.2 3B, Phi-3.5 mini, Qwen3 4B.

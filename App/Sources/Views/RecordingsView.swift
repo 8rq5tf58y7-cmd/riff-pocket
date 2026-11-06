@@ -208,7 +208,9 @@ struct RecordingsView: View {
     // MARK: Actions
 
     private func runSync() async {
-        await sync.sync(account: account, context: context, usePlaudContent: settings.settings.preferPlaudContent)
+        await BackgroundWork.withExtendedTime("Sync") {
+            await sync.sync(account: account, context: context, usePlaudContent: settings.settings.preferPlaudContent)
+        }
     }
 
     private func createFolder() {

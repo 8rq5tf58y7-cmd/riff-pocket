@@ -49,14 +49,14 @@ final class SummarizerTests: XCTestCase {
     func testShortTranscriptIsOneCall() async throws {
         let counter = Counter()
         let s = Summarizer(model: FakeModel(budget: 100_000, counter: counter))
-        _ = try await s.summarize(transcript(lines: 5), template: .meeting)
+        _ = try await s.summarize(transcript(lines: 5), style: .meeting)
         XCTAssertEqual(counter.n, 1)
     }
 
     func testLongTranscriptMapsThenReduces() async throws {
         let counter = Counter()
         let s = Summarizer(model: FakeModel(budget: 2_000, counter: counter))
-        _ = try await s.summarize(transcript(lines: 300), template: .lecture)
+        _ = try await s.summarize(transcript(lines: 300), style: .lecture)
         let chunkCount = Summarizer.chunk(transcript(lines: 300), maxCharacters: 2_000).count
         XCTAssertGreaterThanOrEqual(counter.n, chunkCount + 1)
     }
@@ -70,7 +70,7 @@ final class SummarizerTests: XCTestCase {
     }
 
     func testProviderPresets() {
-        XCTAssertEqual(ProviderConfig.preset(.ollama).baseURL, "http://localhost:11434/v1")
+        XCTAssertEqual(ProviderConfig.preset(.ollama).baseURL, "http://localhost:11434")
         XCTAssertTrue(ProviderKind.whisperKit.canTranscribe)
         XCTAssertFalse(ProviderKind.whisperKit.canChat)
         XCTAssertFalse(ProviderKind.anthropic.canTranscribe)

@@ -70,7 +70,10 @@ targets:
         NSLocalNetworkUsageDescription: Reach Ollama or your Riffado server on your network.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - io.github.riffpocket.app.refresh
+          - io.github.riffpocket.app.process
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
 
