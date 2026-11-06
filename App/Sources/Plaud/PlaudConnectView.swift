@@ -51,6 +51,7 @@ struct PlaudConnectView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .themedList()
             .disabled(working)
             .overlay { if working { ProgressView("Connecting…").padding().background(.regularMaterial, in: .rect(cornerRadius: 12)) } }
             .navigationTitle("Connect Plaud")

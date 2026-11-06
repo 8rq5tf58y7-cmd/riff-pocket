@@ -31,8 +31,10 @@ final class SyncService: ObservableObject {
                 local: byPlaudId.map { PlaudSync.LocalState(plaudId: $0.key, version: $0.value.plaudVersion) }
             )
 
-            for (i, rec) in plan.new.enumerated() {
+            for (i, listed) in plan.new.enumerated() {
                 status = "Downloading \(i + 1) of \(plan.new.count)…"
+                // Plaud 4.0 listings lack transcript/summary flags; the detail fills them in.
+                let rec = (try? await client.hydrate(listed)) ?? listed
                 let file = try await client.downloadAudio(fileId: rec.id, into: RecordingStorage.directory)
                 var duration = rec.durationSeconds
                 if duration <= 0 { duration = await RecordingStorage.duration(of: file) }
@@ -58,7 +60,12 @@ final class SyncService: ObservableObject {
                 if let name = rec.filename, !name.isEmpty { item.title = name }
                 item.plaudVersion = rec.versionMarker
                 item.goneRemotely = false
-                if usePlaudContent { await importPlaudContent(for: item, client: client) }
+                if usePlaudContent {
+                    let hydrated = (try? await client.hydrate(rec)) ?? rec
+                    if hydrated.is_trans != false || hydrated.is_summary != false {
+                        await importPlaudContent(for: item, client: client)
+                    }
+                }
             }
 
             for id in plan.goneRemotely {

@@ -24,6 +24,7 @@ final class RecordingItem {
     var transcriptSource: String?
     var summary: String?
     var summarySource: String?
+    var folder: Folder?
 
     init(title: String, createdAt: Date = .now, duration: Double, audioFileName: String, source: String) {
         self.id = UUID()

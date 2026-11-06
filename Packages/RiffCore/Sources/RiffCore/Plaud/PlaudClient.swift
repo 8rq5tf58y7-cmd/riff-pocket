@@ -121,36 +121,103 @@ public actor PlaudClient {
         return devices
     }
 
-    public func listRecordings(skip: Int = 0, limit: Int = 500) async throws -> (total: Int, items: [PlaudRecording]) {
+    // MARK: Plaud 4.0 mode
+
+    /// Flipped on the first legacy call that answers "Account migrated to 4.0" (status -1800907).
+    public private(set) var usingV4 = false
+    private var v4ListCache: [PlaudRecording]?
+    private var v4DetailCache: [String: PlaudV4.FileDetail] = [:]
+
+    /// Legacy listing page. Returns nil (and switches to v4) for migrated accounts.
+    private func legacyListPage(skip: Int, limit: Int) async throws -> (total: Int, items: [PlaudRecording])? {
         let path = "file/simple/web?skip=\(skip)&limit=\(limit)&is_trash=0&sort_by=edit_time&is_desc=true"
         let resp = try await dataRequest(path, as: PlaudRecordingsResponse.self)
-        guard resp.status == 0 || resp.status == nil else {
-            throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Could not list recordings")
+        if let items = resp.data_file_list { return (resp.data_file_total ?? items.count, items) }
+        if PlaudV4.isMigrated(status: resp.status, msg: resp.msg) {
+            usingV4 = true
+            return nil
         }
-        let items = resp.data_file_list ?? []
-        return (resp.data_file_total ?? items.count, items)
+        throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Could not list recordings")
     }
 
     public func listAllRecordings(pageSize: Int = 200) async throws -> [PlaudRecording] {
-        var all: [PlaudRecording] = []
-        var skip = 0
-        while true {
-            let page = try await listRecordings(skip: skip, limit: pageSize)
-            all += page.items
-            skip += page.items.count
-            if page.items.isEmpty || skip >= page.total { break }
+        if !usingV4 {
+            var all: [PlaudRecording] = []
+            var skip = 0
+            while let page = try await legacyListPage(skip: skip, limit: pageSize) {
+                all += page.items
+                skip += page.items.count
+                if page.items.isEmpty || skip >= page.total { return all }
+            }
         }
-        return all
+        return try await listAllRecordingsV4()
     }
 
-    /// Presigned download URL. `opus: false` gives a format AVFoundation/WhisperKit read directly.
-    public func audioURL(fileId: String, opus: Bool = false) async throws -> URL {
-        let resp = try await dataRequest("file/temp-url/\(fileId)?is_opus=\(opus ? 1 : 0)", as: PlaudTempURLResponse.self)
-        let s = (opus ? resp.temp_url_opus : nil) ?? resp.temp_url
-        guard let s = s, let url = URL(string: s) else {
-            throw PlaudError.api(status: resp.status ?? -1, message: "No download URL for \(fileId)")
+    /// `/file-app/v4/recordings/all`, cursor-paginated, newest first.
+    private func listAllRecordingsV4() async throws -> [PlaudRecording] {
+        if let cached = v4ListCache { return cached }
+        var out: [PlaudRecording] = []
+        var cursor: String?
+        for _ in 0..<400 {
+            var path = "file-app/v4/recordings/all?sort_by=created&sort_order=desc&page_size=50"
+            if let c = cursor, let enc = c.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                path += "&cursor=\(enc)"
+            }
+            let resp = try await dataRequest(path, as: PlaudV4.RecordingsResponse.self)
+            guard resp.status == 0, let items = resp.data?.items else {
+                throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Invalid Plaud 4.0 recordings response")
+            }
+            out += items.map(PlaudV4.map)
+            guard let next = resp.data?.next_cursor, !next.isEmpty, !items.isEmpty else { break }
+            cursor = next
         }
-        return url
+        v4ListCache = out
+        return out
+    }
+
+    private func v4Detail(recordingId: String) async throws -> PlaudV4.FileDetail {
+        let fileId = PlaudV4.fileId(fromRecordingId: recordingId)
+        if let cached = v4DetailCache[fileId] { return cached }
+        let escaped = fileId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fileId
+        let resp = try await dataRequest("file-app/v4/files/detail/\(escaped)", as: PlaudV4.FileDetailResponse.self)
+        guard resp.status == 0, let detail = resp.data else {
+            throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Invalid Plaud 4.0 file detail")
+        }
+        v4DetailCache[fileId] = detail
+        return detail
+    }
+
+    /// Presigned URLs for v4 content ids.
+    private func v4ContentURLs(_ ids: [String]) async throws -> [String: String] {
+        guard !ids.isEmpty else { return [:] }
+        let body = try JSONSerialization.data(withJSONObject: ["content_ids": ids])
+        let resp = try await dataRequest("file-app/v4/files/content/url", method: "POST", body: body,
+                                         as: PlaudV4.ContentURLResponse.self)
+        return resp.status == 0 ? (resp.data?.url_map ?? [:]) : [:]
+    }
+
+    /// Fills duration and transcript/summary flags for recordings listed via v4 (no-op otherwise).
+    public func hydrate(_ recording: PlaudRecording) async throws -> PlaudRecording {
+        guard recording.source == "v4" else { return recording }
+        return PlaudV4.apply(try await v4Detail(recordingId: recording.id), to: recording)
+    }
+
+    /// Presigned download URL. `opus: false` gives a format AVFoundation/WhisperKit read directly
+    /// (legacy accounts; Plaud 4.0 serves whatever its AUDIO object holds).
+    public func audioURL(fileId: String, opus: Bool = false) async throws -> URL {
+        if !usingV4 {
+            let resp = try await dataRequest("file/temp-url/\(fileId)?is_opus=\(opus ? 1 : 0)", as: PlaudTempURLResponse.self)
+            if let s = (opus ? resp.temp_url_opus : nil) ?? resp.temp_url, let url = URL(string: s) { return url }
+            guard PlaudV4.isMigrated(status: resp.status, msg: resp.msg) else {
+                throw PlaudError.api(status: resp.status ?? -1, message: "No download URL for \(fileId)")
+            }
+            usingV4 = true
+        }
+        let detail = try await v4Detail(recordingId: fileId)
+        let audio = detail.objects?.first { $0.object_type == "AUDIO" }
+        if let s = audio?.content_url, let url = URL(string: s) { return url }
+        if let cid = audio?.content_id, let s = try await v4ContentURLs([cid])[cid], let url = URL(string: s) { return url }
+        throw PlaudError.api(status: -1, message: "Plaud has no downloadable audio for this recording yet.")
     }
 
     /// Downloads the recording into `directory`; returns the saved file URL.
@@ -167,8 +234,26 @@ public actor PlaudClient {
     }
 
     public func fileDetail(fileId: String) async throws -> PlaudFileDetail? {
-        let resp = try await dataRequest("file/detail/\(fileId)", as: PlaudFileDetailResponse.self)
-        return resp.data
+        if !usingV4 {
+            let resp = try await dataRequest("file/detail/\(fileId)", as: PlaudFileDetailResponse.self)
+            guard PlaudV4.isMigrated(status: resp.status, msg: resp.msg) else { return resp.data }
+            usingV4 = true
+        }
+        // Plaud 4.0: same gzip payloads, reached through the v4 detail; resolve missing URLs.
+        var detail = try await v4Detail(recordingId: fileId)
+        let missing = (detail.objects ?? []).filter {
+            ($0.object_type == "TRANSCRIPT" || $0.object_type == "SUMMARY")
+                && ($0.content_url ?? "").isEmpty && !($0.content_id ?? "").isEmpty
+        }.compactMap(\.content_id)
+        if !missing.isEmpty {
+            let urls = try await v4ContentURLs(missing)
+            detail.objects = detail.objects?.map { o in
+                var o = o
+                if (o.content_url ?? "").isEmpty, let cid = o.content_id, let u = urls[cid] { o.content_url = u }
+                return o
+            }
+        }
+        return PlaudV4.legacyDetail(detail)
     }
 
     /// Presigned content (transcript/summary JSON); no auth header; may be gzip.

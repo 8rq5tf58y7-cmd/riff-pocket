@@ -1,156 +1,204 @@
 import SwiftUI
+import SwiftData
 import AVFoundation
 import RiffCore
 
 struct RecordingDetailView: View {
     @Bindable var recording: RecordingItem
+    @Environment(\.modelContext) private var context
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var account: PlaudAccount
+    @Query(sort: \Folder.name) private var folders: [Folder]
     @StateObject private var player = AudioPlayer()
 
-    enum DetailTab: String, CaseIterable { case transcript = "Transcript", summary = "Summary", ask = "Ask" }
+    enum DetailTab: String, CaseIterable { case summary = "Summary", transcript = "Transcript", ask = "Ask" }
 
-    @State private var tab: DetailTab = .transcript
+    @State private var tab: DetailTab = .summary
     @State private var busy: String?
     @State private var errorText: String?
     @State private var template: SummaryTemplate = .meeting
-    @State private var question = ""
+    @State private var draft = ""
     @State private var chat: [ChatMessage] = []
+    @State private var summaryModel: ProviderConfig?
+    @State private var askModel: ProviderConfig?
+
+    private var summaryConfig: Binding<ProviderConfig> {
+        Binding(get: { summaryModel ?? settings.settings.summarize }, set: { summaryModel = $0 })
+    }
+    private var askConfig: Binding<ProviderConfig> {
+        Binding(get: { askModel ?? settings.settings.chat }, set: { askModel = $0 })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            playerBar
-            Picker("View", selection: $tab) {
-                ForEach(DetailTab.allCases, id: \.self) { Text($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.bottom, 8)
-
+            header
+            tabBar
             Group {
                 switch tab {
-                case .transcript: transcriptView
                 case .summary: summaryView
+                case .transcript: transcriptView
                 case .ask: askView
                 }
             }
             .frame(maxHeight: .infinity)
         }
-        .navigationTitle(recording.title)
+        .background(Theme.background)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if recording.plaudId != nil {
-                        Button("Get Plaud's transcript & summary", systemImage: "icloud.and.arrow.down") {
-                            Task { await fetchPlaudContent() }
-                        }
-                    }
-                    Button("Transcribe on this phone", systemImage: "waveform.badge.mic") { Task { await transcribe() } }
-                    ShareLink(item: recording.audioURL) { Label("Share audio", systemImage: "square.and.arrow.up") }
-                    if let t = recording.transcript {
-                        ShareLink(item: t.timestampedLines.joined(separator: "\n")) { Label("Share transcript", systemImage: "doc.text") }
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
-            }
-        }
+        .toolbar { toolbar }
         .onAppear { player.load(recording.audioURL) }
         .onDisappear { player.stop() }
-        .overlay {
-            if let busy {
-                ProgressView(busy).padding().background(.regularMaterial, in: .rect(cornerRadius: 12))
-            }
-        }
         .alert("Something went wrong", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
             Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorText ?? "")
-        }
+        } message: { Text(errorText ?? "") }
     }
 
-    // MARK: Player
+    // MARK: Header + player
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Title", text: $recording.title, axis: .vertical)
+                .font(Theme.serif(24, .medium))
+                .lineLimit(1...3)
+            HStack(spacing: 8) {
+                Text(recording.createdAt, format: .dateTime.weekday(.abbreviated).month().day().hour().minute())
+                if let f = recording.folder { StatusPill(text: f.name, systemImage: "folder") }
+                if recording.source == "plaud" { StatusPill(text: "Plaud", systemImage: "icloud") }
+            }
+            .font(Theme.mono).foregroundStyle(Theme.secondary)
+            playerBar
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
+    }
 
     private var playerBar: some View {
-        VStack(spacing: 6) {
-            Slider(value: Binding(get: { player.currentTime }, set: { player.seek($0) }),
-                   in: 0...max(player.duration, 1))
-            HStack {
-                Text(Transcript.clock(player.currentTime)).monospacedDigit()
-                Spacer()
-                Button { player.skip(-15) } label: { Image(systemName: "gobackward.15") }
-                Button { player.toggle() } label: {
-                    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill").font(.largeTitle)
-                }
-                Button { player.skip(15) } label: { Image(systemName: "goforward.15") }
-                Spacer()
-                Text(Transcript.clock(player.duration)).monospacedDigit()
+        HStack(spacing: 12) {
+            Button { player.toggle() } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.accent, in: .circle)
             }
-            .font(.caption)
+            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+            VStack(spacing: 2) {
+                Slider(value: Binding(get: { player.currentTime }, set: { player.seek($0) }), in: 0...max(player.duration, 1))
+                HStack {
+                    Text(Transcript.clock(player.currentTime))
+                    Spacer()
+                    Button { player.skip(-15) } label: { Image(systemName: "gobackward.15") }
+                    Button { player.skip(15) } label: { Image(systemName: "goforward.15") }
+                    Spacer()
+                    Text(Transcript.clock(player.duration))
+                }
+                .font(Theme.monoSmall).foregroundStyle(Theme.secondary).monospacedDigit()
+            }
         }
-        .padding()
+        .card(padding: 10)
     }
 
-    // MARK: Transcript
-
-    @ViewBuilder
-    private var transcriptView: some View {
-        if let t = recording.transcript, !t.segments.isEmpty {
-            List {
-                if let source = recording.transcriptSource {
-                    Text("Source: \(source == "plaud" ? "Plaud" : source)").font(.caption).foregroundStyle(.secondary)
+    private var tabBar: some View {
+        HStack(spacing: 4) {
+            ForEach(DetailTab.allCases, id: \.self) { t in
+                Button { withAnimation(.snappy) { tab = t } } label: {
+                    Text(t.rawValue)
+                        .font(.subheadline.weight(tab == t ? .semibold : .regular))
+                        .foregroundStyle(tab == t ? Theme.text : Theme.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 8)
+                        .background(tab == t ? Theme.raised : .clear, in: .rect(cornerRadius: 10))
                 }
-                ForEach(Array(t.segments.enumerated()), id: \.offset) { _, seg in
-                    Button { player.seek(seg.start); player.play() } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(Transcript.clock(seg.start)).monospacedDigit()
-                                if let s = seg.speaker { Text(s).bold() }
-                            }
-                            .font(.caption).foregroundStyle(.secondary)
-                            Text(seg.text.trimmingCharacters(in: .whitespaces)).foregroundStyle(.primary)
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-        } else {
-            ContentUnavailableView {
-                Label("No transcript", systemImage: "text.alignleft")
-            } description: {
-                Text("Using \(settings.settings.transcribe.kind.label). Change it in Settings.")
-            } actions: {
-                Button("Transcribe") { Task { await transcribe() } }.buttonStyle(.borderedProminent)
-                if recording.plaudId != nil {
-                    Button("Check Plaud for a transcript") { Task { await fetchPlaudContent() } }
-                }
+                .buttonStyle(.plain)
             }
         }
+        .padding(4)
+        .background(Theme.surface, in: .rect(cornerRadius: 13))
+        .padding(.horizontal, 18).padding(.vertical, 12)
     }
 
     // MARK: Summary
 
     private var summaryView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Picker("Template", selection: $template) {
-                        ForEach(SummaryTemplate.allCases) { Text($0.label).tag($0) }
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Menu {
+                        Picker("Template", selection: $template) {
+                            ForEach(SummaryTemplate.allCases) { Text($0.label).tag($0) }
+                        }
+                    } label: {
+                        Label(template.label, systemImage: "doc.text").font(Theme.mono)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Theme.surface, in: .capsule)
                     }
+                    ModelChip(config: summaryConfig, task: .summarize) { settings.settings.summarize = $0 }
                     Spacer()
-                    Button(recording.summary == nil ? "Summarize" : "Regenerate") { Task { await summarize() } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(recording.transcript == nil)
                 }
-                if let summary = recording.summary {
+                if let b = busy, tab == .summary {
+                    ThinkingIndicator(label: b)
+                } else if let summary = recording.summary {
                     if let source = recording.summarySource {
-                        Text("Source: \(source == "plaud" ? "Plaud" : source)").font(.caption).foregroundStyle(.secondary)
+                        SectionLabel(source == "plaud" ? "From Plaud" : "By \(source)")
                     }
-                    Text(markdown(summary)).textSelection(.enabled)
-                } else if recording.transcript == nil {
-                    Text("Transcribe first, then summarize.").foregroundStyle(.secondary)
+                    MarkdownText(summary)
+                    Button { Task { await summarize() } } label: {
+                        Label("Regenerate", systemImage: "arrow.clockwise").font(.subheadline)
+                    }
+                    .disabled(recording.transcript == nil)
+                    .padding(.top, 6)
+                } else {
+                    emptyCard(
+                        title: recording.transcript == nil ? "Transcribe first" : "No summary yet",
+                        body: recording.transcript == nil
+                            ? "A summary needs a transcript. Transcribe this recording, or fetch Plaud's."
+                            : "Summarize with \(summaryConfig.wrappedValue.chipLabel).",
+                        action: recording.transcript == nil ? ("Transcribe", startTranscribe) : ("Summarize", startSummarize)
+                    )
                 }
             }
-            .padding()
+            .padding(.horizontal, 18).padding(.bottom, 24)
+        }
+    }
+
+    // MARK: Transcript
+
+    @ViewBuilder
+    private var transcriptView: some View {
+        if let b = busy, tab == .transcript {
+            VStack { ThinkingIndicator(label: b).padding(.top, 40); Spacer() }
+        } else if let t = recording.transcript, !t.segments.isEmpty {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if let source = recording.transcriptSource {
+                        SectionLabel(source == "plaud" ? "From Plaud" : "By \(source)")
+                    }
+                    ForEach(Array(t.segments.enumerated()), id: \.offset) { _, seg in
+                        Button { player.seek(seg.start); player.play() } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(Transcript.clock(seg.start)).foregroundStyle(Theme.accent)
+                                    if let s = seg.speaker { Text(s).foregroundStyle(Theme.secondary) }
+                                }
+                                .font(Theme.monoSmall)
+                                Text(seg.text.trimmingCharacters(in: .whitespaces))
+                                    .foregroundStyle(Theme.text)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 18).padding(.bottom, 24)
+            }
+        } else {
+            ScrollView {
+                emptyCard(
+                    title: "No transcript",
+                    body: "Transcribe with \(settings.settings.transcribe.chipLabel)\(recording.plaudId != nil ? ", or fetch Plaud's own" : "").",
+                    action: ("Transcribe", startTranscribe)
+                )
+                .padding(.horizontal, 18)
+            }
         }
     }
 
@@ -158,44 +206,83 @@ struct RecordingDetailView: View {
 
     private var askView: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if chat.isEmpty {
-                        Text("Ask anything about this recording — \"What did we decide about pricing?\"")
-                            .foregroundStyle(.secondary)
+            ChatTranscriptView(
+                messages: chat,
+                isThinking: busy != nil && tab == .ask,
+                greeting: "Ask about this note",
+                subtitle: recording.transcript == nil ? "Transcribe it first so there's something to read." : nil,
+                suggestions: recording.transcript == nil ? [] : [
+                    "What were the decisions?", "List the action items with owners", "What questions were left open?",
+                ],
+                onSuggestion: { draft = $0; Task { await ask() } }
+            )
+            Composer(text: $draft, placeholder: "Ask about this note…", isBusy: busy != nil,
+                     isEnabled: recording.transcript != nil, onSend: { Task { await ask() } }) {
+                ModelChip(config: askConfig, task: .chat) { settings.settings.chat = $0 }
+            }
+        }
+    }
+
+    private func emptyCard(title: String, body: String, action: (String, () -> Void)) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(Theme.serif(19, .semibold))
+            Text(body).font(.subheadline).foregroundStyle(Theme.secondary)
+            Button(action: action.1) {
+                Text(action.0).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(Theme.accent, in: .capsule)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Menu("Folder", systemImage: "folder") {
+                    Button { recording.folder = nil } label: {
+                        if recording.folder == nil { Label("None", systemImage: "checkmark") } else { Text("None") }
                     }
-                    ForEach(Array(chat.enumerated()), id: \.offset) { _, m in
-                        Text(markdown(m.content))
-                            .padding(10)
-                            .background(m.role == .user ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1),
-                                        in: .rect(cornerRadius: 10))
-                            .frame(maxWidth: .infinity, alignment: m.role == .user ? .trailing : .leading)
-                            .textSelection(.enabled)
+                    ForEach(folders) { f in
+                        Button { recording.folder = f } label: {
+                            if recording.folder?.id == f.id { Label(f.name, systemImage: "checkmark") } else { Text(f.name) }
+                        }
                     }
                 }
-                .padding()
-            }
-            HStack {
-                TextField("Ask about this recording", text: $question, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                Button { Task { await ask() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                    .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty || recording.transcript == nil)
-            }
-            .padding()
+                if recording.plaudId != nil {
+                    Button("Get Plaud's transcript & summary", systemImage: "icloud.and.arrow.down") { Task { await fetchPlaudContent() } }
+                }
+                Button("Transcribe on this iPhone", systemImage: "waveform.badge.mic") { Task { await transcribe() } }
+                Divider()
+                ShareLink(item: recording.audioURL) { Label("Share audio", systemImage: "square.and.arrow.up") }
+                if let t = recording.transcript {
+                    ShareLink(item: t.timestampedLines.joined(separator: "\n")) { Label("Share transcript", systemImage: "doc.text") }
+                }
+                if let s = recording.summary {
+                    ShareLink(item: s) { Label("Share summary", systemImage: "sparkles") }
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
         }
     }
 
     // MARK: Actions
 
+    private func startTranscribe() { Task { await transcribe() } }
+    private func startSummarize() { Task { await summarize() } }
+
     private func transcribe() async {
-        busy = "Transcribing… (first run downloads the model)"
+        tab = .transcript
+        busy = "Transcribing"
         defer { busy = nil }
         do {
-            let config = settings.settings.transcribe
-            let transcriber = try AIRouter.transcriber(for: config)
+            let transcriber = try AIRouter.transcriber(for: settings.settings.transcribe)
             let lang = settings.settings.language.isEmpty ? nil : settings.settings.language
             recording.transcript = try await transcriber.transcribe(fileURL: recording.audioURL, language: lang)
             recording.transcriptSource = transcriber.displayName
+            try? context.save()
         } catch {
             errorText = errorMessage(error)
         }
@@ -203,12 +290,13 @@ struct RecordingDetailView: View {
 
     private func summarize() async {
         guard let t = recording.transcript else { return }
-        busy = "Summarizing…"
+        busy = "Summarizing"
         defer { busy = nil }
         do {
-            let model = try AIRouter.chatModel(for: settings.settings.summarize, task: .summarize)
+            let model = try AIRouter.chatModel(for: summaryConfig.wrappedValue, task: .summarize)
             recording.summary = try await Summarizer(model: model).summarize(t, template: template)
             recording.summarySource = model.displayName
+            try? context.save()
         } catch {
             errorText = errorMessage(error)
         }
@@ -216,39 +304,32 @@ struct RecordingDetailView: View {
 
     private func ask() async {
         guard let t = recording.transcript else { return }
-        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        question = ""
+        let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, busy == nil else { return }
+        draft = ""
         let history = chat
         chat.append(.user(q))
-        busy = "Thinking…"
+        busy = "Thinking"
         defer { busy = nil }
         do {
-            let model = try AIRouter.chatModel(for: settings.settings.chat, task: .chat)
-            let answer = try await Summarizer(model: model).answer(q, transcript: t, history: history)
-            chat.append(.assistant(answer))
+            let model = try AIRouter.chatModel(for: askConfig.wrappedValue, task: .chat)
+            chat.append(.assistant(try await Summarizer(model: model).answer(q, transcript: t, history: history)))
         } catch {
             chat.removeLast()
-            question = q
+            draft = q
             errorText = errorMessage(error)
         }
     }
 
     private func fetchPlaudContent() async {
-        guard let client = account.makeClient() else {
-            errorText = "Connect your Plaud account first."
-            return
-        }
-        busy = "Asking Plaud…"
+        guard let client = account.makeClient() else { errorText = "Connect your Plaud account first."; return }
+        busy = "Asking Plaud"
         defer { busy = nil }
         await SyncService().importPlaudContent(for: recording, client: client)
+        try? context.save()
         if recording.transcript == nil && recording.summary == nil {
             errorText = "Plaud has no transcript or summary for this recording yet."
         }
-    }
-
-    private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
     }
 }
 

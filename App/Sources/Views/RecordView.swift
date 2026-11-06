@@ -11,24 +11,46 @@ struct RecordView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 32) {
+            VStack(spacing: 28) {
                 Spacer()
+                Text(recorder.isRecording ? "Recording" : "Ready when you are")
+                    .font(Theme.mono).foregroundStyle(recorder.isRecording ? Theme.accent : Theme.secondary)
                 Text(Duration.seconds(recorder.elapsed), format: .time(pattern: .hourMinuteSecond))
-                    .font(.system(size: 56, weight: .light, design: .rounded))
+                    .font(Theme.serif(60, .light))
                     .monospacedDigit()
                 Button {
                     Task { await toggle() }
                 } label: {
-                    Image(systemName: recorder.isRecording ? "stop.circle.fill" : "record.circle")
-                        .font(.system(size: 96))
-                        .foregroundStyle(.red)
+                    ZStack {
+                        Circle().fill(Theme.accentSoft).frame(width: 132, height: 132)
+                            .scaleEffect(recorder.isRecording ? 1.08 : 1)
+                            .animation(recorder.isRecording ? .easeInOut(duration: 0.9).repeatForever() : .default,
+                                       value: recorder.isRecording)
+                        Group {
+                            if recorder.isRecording {
+                                RoundedRectangle(cornerRadius: 8).fill(.white).frame(width: 30, height: 30)
+                            } else {
+                                Image(systemName: "mic.fill").font(.system(size: 34, weight: .semibold)).foregroundStyle(.white)
+                            }
+                        }
+                        .frame(width: 92, height: 92)
+                        .background(Theme.accent, in: .circle)
+                    }
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel(recorder.isRecording ? "Stop recording" : "Start recording")
-                if let savedTitle { Text("Saved \"\(savedTitle)\" to Recordings").foregroundStyle(.secondary) }
+                if let savedTitle {
+                    Label("Saved “\(savedTitle)”", systemImage: "checkmark.circle")
+                        .font(.subheadline).foregroundStyle(Theme.success)
+                }
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 Spacer()
+                Text("For when your recorder isn't with you. Notes appear in Notes, ready to transcribe.")
+                    .font(.caption).foregroundStyle(Theme.secondary).multilineTextAlignment(.center)
             }
-            .padding()
+            .padding(24)
+            .frame(maxWidth: .infinity)
+            .background(Theme.background)
             .navigationTitle("Record")
         }
     }

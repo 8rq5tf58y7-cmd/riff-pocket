@@ -74,6 +74,10 @@ final class SummarizerTests: XCTestCase {
         XCTAssertTrue(ProviderKind.whisperKit.canTranscribe)
         XCTAssertFalse(ProviderKind.whisperKit.canChat)
         XCTAssertFalse(ProviderKind.anthropic.canTranscribe)
+        XCTAssertTrue(ProviderKind.mlx.canChat)
+        XCTAssertFalse(ProviderKind.mlx.canTranscribe)
+        XCTAssertFalse(ProviderKind.mlx.needsAPIKey)
+        XCTAssertEqual(ProviderConfig.preset(.mlx).model, "mlx-community/Qwen3-1.7B-4bit")
     }
 
     func testMakeURLJoinsCleanly() throws {

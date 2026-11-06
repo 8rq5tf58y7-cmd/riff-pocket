@@ -86,6 +86,20 @@ public struct OpenAICompatibleClient: ChatModel, Transcriber {
         return resp.choices.first?.message.content ?? ""
     }
 
+    // MARK: Model listing (Ollama, OpenAI, OpenRouter, LM Studio, Groq all serve GET /models)
+
+    private struct ModelsResponse: Decodable {
+        struct Model: Decodable { let id: String }
+        let data: [Model]
+    }
+
+    public func listModels() async throws -> [String] {
+        var req = URLRequest(url: try makeURL(baseURL, "models"))
+        req.timeoutInterval = 30
+        authorize(&req)
+        return try await http.sendJSON(req, as: ModelsResponse.self).data.map(\.id).sorted()
+    }
+
     // MARK: Transcription
 
     private struct TranscriptionResponse: Decodable {

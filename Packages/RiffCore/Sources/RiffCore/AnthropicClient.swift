@@ -34,6 +34,18 @@ public struct AnthropicClient: ChatModel {
         let content: [Block]
     }
 
+    private struct ModelsResponse: Decodable {
+        struct Model: Decodable { let id: String }
+        let data: [Model]
+    }
+
+    public func listModels() async throws -> [String] {
+        var req = URLRequest(url: try makeURL(baseURL, "models?limit=100"))
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        return try await http.sendJSON(req, as: ModelsResponse.self).data.map(\.id)
+    }
+
     public func complete(_ messages: [ChatMessage], options: ChatOptions) async throws -> String {
         let system = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
         let turns = messages.filter { $0.role != .system }.map { Body.Msg(role: $0.role.rawValue, content: $0.content) }
