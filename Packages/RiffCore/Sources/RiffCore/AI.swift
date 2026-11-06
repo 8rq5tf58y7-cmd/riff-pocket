@@ -117,7 +117,7 @@ public struct ProviderConfig: Codable, Hashable, Sendable {
         case .openAICompatible:
             return .init(kind: kind, baseURL: "https://api.openai.com/v1", model: forTranscription ? "whisper-1" : "gpt-4o-mini")
         case .anthropic:
-            return .init(kind: kind, baseURL: "https://api.anthropic.com/v1", model: "claude-sonnet-5-5")
+            return .init(kind: kind, baseURL: "https://api.anthropic.com/v1", model: "claude-opus-5-5")
         case .openRouter:
             return .init(kind: kind, baseURL: "https://openrouter.ai/api/v1", model: "openrouter/auto")
         case .riffado:
