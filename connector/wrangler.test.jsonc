@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // TESTS ONLY (npm test / CI): no Workers AI binding; transcription goes to the fake server in test/fake-plaud.mjs.
+  // Rename if you like; your connector URL becomes https://<name>.<your-subdomain>.workers.dev/mcp
+  "name": "riff-pocket-connector",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // Client ID Metadata Documents (how Claude identifies itself) are fetched from client-supplied
+  // URLs; this flag stops those fetches from reaching private addresses.
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  // Pull new Plaud recordings every 30 minutes (and transcribe a few Plaud didn't).
+  "triggers": { "crons": ["*/30 * * * *"] },
+  // Speech-to-text for recordings Plaud hasn't transcribed: Deepgram Nova-3 on Workers AI.
+  // Optional: "TRANSCRIBE_PROVIDER": "openai" (+ TRANSCRIBE_BASE_URL / TRANSCRIBE_MODEL, and the
+  // TRANSCRIBE_API_KEY secret) to use OpenAI/Groq Whisper instead, or "off"; TRANSCRIBE_LANGUAGE e.g. "en".
+  "vars": { "TRANSCRIBE_PROVIDER": "openai", "TRANSCRIBE_BASE_URL": "http://127.0.0.1:8790/v1", "TRANSCRIBE_MODEL": "whisper-test" },
+  // `npx wrangler kv namespace create OAUTH_KV` and `npx wrangler d1 create riff-pocket` print these ids.
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "riff-pocket", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations" }
+  ]
+  // Secrets (never in this file): OWNER_PASSWORD, and SYNC_KEY if you use the iPhone app's mirror —
+  // `npx wrangler secret put <NAME>`.
+}

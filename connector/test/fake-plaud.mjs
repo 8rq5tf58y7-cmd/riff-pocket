@@ -45,6 +45,19 @@ export function startFakePlaud(port) {
     if (path === "team-app/workspaces/list") return needs(USER_TOKEN) && send({ status: 0, data: { workspaces: [{ workspace_id: "W1", workspace_type: "0" }] } });
     if (path === "user-app/auth/workspace/token/W1") return needs(USER_TOKEN) && send({ status: 0, data: { workspace_token: WT } });
 
+    // Fake Whisper (OpenAI-compatible) used by the connector's transcription in tests
+    if (path === "v1/audio/transcriptions") {
+      state.transcriptions = (state.transcriptions ?? 0) + 1;
+      if (auth !== "test-transcribe-key") return send({ error: "bad key" }, 401);
+      if (!body.includes("FAKE-MP3-AUDIO")) return send({ error: "no audio received" }, 400);
+      return send({ language: "en", text: "Remember to renew the parking permit.", segments: [
+        { start: 0.5, end: 3.2, text: " Remember to renew the parking permit." },
+        { start: 3.4, end: 6.0, text: " It expires on Friday." },
+      ] });
+    }
+    // Audio files (no auth)
+    if (path === "audio/rec2.mp3") return send(Buffer.from("ID3FAKE-MP3-AUDIO-BYTES"), 200, "audio/mpeg");
+
     // Content links (no auth, gzip)
     if (path === "content/trans.json.gz") return send(gzipSync(JSON.stringify(transcript)), 200, "application/octet-stream");
     if (path === "content/sum.md.gz") return send(gzipSync("## Summary\n- Launch moved to March 3 [00:01:01]"), 200, "application/octet-stream");
@@ -54,6 +67,7 @@ export function startFakePlaud(port) {
 
     // Classic API
     if (path === "file/simple/web") return send(state.v4 ? migratedReply : { status: 0, data_file_total: 2, data_file_list: legacyFiles() });
+    if (path === "file/temp-url/rec2") return send(state.v4 ? migratedReply : { status: 0, temp_url: `${base}/audio/rec2.mp3` });
     if (path === "file/detail/rec1") {
       if (state.v4) return send(migratedReply);
       return send({ status: 0, data: {

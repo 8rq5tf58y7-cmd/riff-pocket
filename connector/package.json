@@ -10,9 +10,10 @@
     "deploy": "wrangler deploy",
     "types": "wrangler types",
     "check": "tsc --noEmit",
-    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:local": "wrangler d1 migrations apply DB --local -c wrangler.test.jsonc",
     "db:remote": "wrangler d1 migrations apply DB --remote",
-    "test": "node test/e2e.mjs"
+    "test": "node test/unit.mjs && node test/e2e.mjs",
+    "dev:test": "wrangler dev -c wrangler.test.jsonc --local-protocol https --port 8788 --test-scheduled"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4"

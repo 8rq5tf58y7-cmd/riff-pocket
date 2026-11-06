@@ -62,7 +62,8 @@ export interface SetupView {
   nonce: string;
   notes: number;
   plaud: { connected: boolean; apiBase?: string; expires?: number | null };
-  sync?: { at: number; listed: number; added: number; updated: number; pending: number; blocked?: boolean; error?: string } | null;
+  sync?: { at: number; listed: number; added: number; updated: number; pending: number; transcribed?: number; toTranscribe?: number; blocked?: boolean; error?: string } | null;
+  transcription: string;
   message?: { text: string; ok: boolean };
   /** After "send code": the second email step. */
   otp?: { otpToken: string; apiBase: string; email: string };
@@ -77,7 +78,8 @@ export function setupPage(v: SetupView): Response {
   const status = !v.plaud.connected
     ? `<p class="warn">Plaud isn't connected yet.</p>`
     : `<p>✓ Plaud connected · ${esc(v.plaud.apiBase ?? "")}${v.plaud.expires ? ` · sign-in valid until ${esc(when(v.plaud.expires).slice(5, 16))}` : ""}</p>
-       ${sync ? `<p class="muted">Last sync ${esc(when(sync.at))}: ${sync.listed} recordings seen, ${sync.added} new, ${sync.updated} updated${sync.pending ? `, ${sync.pending} still loading (next runs)` : ""}.</p>` : ""}
+       ${sync ? `<p class="muted">Last sync ${esc(when(sync.at))}: ${sync.listed} recordings seen, ${sync.added} new, ${sync.updated} updated${sync.pending ? `, ${sync.pending} still loading (next runs)` : ""}${sync.transcribed ? `, ${sync.transcribed} transcribed` : ""}${sync.toTranscribe ? `, ${sync.toTranscribe} waiting for transcription` : ""}.</p>` : ""}
+       <p class="muted">Transcription for recordings Plaud didn't transcribe: <strong>${esc(v.transcription)}</strong></p>
        ${sync?.blocked ? `<p class="err">Plaud blocks requests from Cloudflare's servers, so the connector can't read Plaud directly. Notes can still reach it from the Riff Pocket iPhone app's mirror (see README).</p>` : sync?.error ? `<p class="err">${esc(sync.error)}</p>` : ""}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Connector setup</title><style>${STYLE}

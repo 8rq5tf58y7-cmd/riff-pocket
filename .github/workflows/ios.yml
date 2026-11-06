@@ -79,9 +79,10 @@ jobs:
           npm ci
           npx wrangler types
           npx tsc --noEmit
-          printf 'OWNER_PASSWORD=%s\nSYNC_KEY=%s\nPLAUD_API_OVERRIDE=http://127.0.0.1:8790\n' "ci-password-$RANDOM$RANDOM" "ci-sync-key-$RANDOM$RANDOM$RANDOM$RANDOM" > .dev.vars
-          npx wrangler d1 migrations apply DB --local
-          npx wrangler dev --local-protocol https --port 8788 --ip 127.0.0.1 --test-scheduled > wrangler.log 2>&1 &
+          printf 'OWNER_PASSWORD=%s\nSYNC_KEY=%s\nPLAUD_API_OVERRIDE=http://127.0.0.1:8790\nTRANSCRIBE_API_KEY=test-transcribe-key\n' "ci-password-$RANDOM$RANDOM" "ci-sync-key-$RANDOM$RANDOM$RANDOM$RANDOM" > .dev.vars
+          node test/unit.mjs
+          npx wrangler d1 migrations apply DB --local -c wrangler.test.jsonc
+          npx wrangler dev -c wrangler.test.jsonc --local-protocol https --port 8788 --ip 127.0.0.1 --test-scheduled > wrangler.log 2>&1 &
           for i in $(seq 1 60); do curl -skf https://127.0.0.1:8788/health && break; sleep 1; done
           set -a; . ./.dev.vars; set +a
           NODE_TLS_REJECT_UNAUTHORIZED=0 BASE=https://127.0.0.1:8788 FAKE_PLAUD_PORT=8790 node test/e2e.mjs || { cat wrangler.log; exit 1; }

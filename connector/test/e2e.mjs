@@ -134,9 +134,10 @@ const note = await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorizati
 assert.equal(note.status, 202);
 const { tools } = await rpc("tools/list", {});
 assert.deepEqual(tools.map((t) => t.name).sort(),
-  ["get_note", "list_folders", "list_recent_notes", "plaud_get_recording", "plaud_recent_recordings", "search_notes", "sync_plaud"]);
-assert.ok(tools.every((t) => t.annotations?.readOnlyHint === true));
-step("initialize, notifications (202), tools/list — 7 read-only tools");
+  ["get_note", "list_folders", "list_recent_notes", "plaud_get_recording", "plaud_recent_recordings", "search_notes", "sync_plaud", "transcribe_recording"]);
+assert.ok(tools.filter((t) => t.name !== "transcribe_recording").every((t) => t.annotations?.readOnlyHint === true));
+assert.equal(tools.find((t) => t.name === "transcribe_recording").annotations.destructiveHint, false);
+step("initialize, notifications (202), tools/list — 8 tools (only transcribe_recording writes, non-destructively)");
 
 const text = (r) => r.content.map((c) => c.text).join("\n");
 const found = await rpc("tools/call", { name: "search_notes", arguments: { query: "Globex price" } });
@@ -207,6 +208,20 @@ if (FAKE_PLAUD_PORT) {
     const found = text(await rpc("tools/call", { name: "search_notes", arguments: { query: "March launch date" } }));
     assert.match(found, /Zebra Launch Review/);
     step("token connect → sync imports recordings with Plaud's transcript (gzip) and summary");
+
+    // Transcription: rec2 has no Plaud transcript, so the connector transcribes it itself.
+    const memoId = noteIdForPlaud("rec2");
+    assert.match(text(await rpc("tools/call", { name: "get_note", arguments: { id: memoId } })), /call transcribe_recording/);
+    const tr = text(await rpc("tools/call", { name: "transcribe_recording", arguments: { id: memoId } }));
+    assert.match(tr, /Transcribed “Untranscribed Memo”/, tr);
+    const memoNote = text(await rpc("tools/call", { name: "get_note", arguments: { id: memoId } }));
+    assert.match(memoNote, /\[00:00:03\] It expires on Friday\./);
+    assert.match(memoNote, /Transcribed by whisper-test/);
+    assert.match(text(await rpc("tools/call", { name: "search_notes", arguments: { query: "parking permit" } })), /Untranscribed Memo/);
+    assert.match(text(await rpc("tools/call", { name: "transcribe_recording", arguments: { id: memoId } })), /already has a transcript/);
+    assert.match(text(await rpc("tools/call", { name: "transcribe_recording", arguments: { id: zebraId } })), /already has a transcript/);
+    assert.equal(fake.state.transcriptions, 1, "Plaud's own transcripts are never re-transcribed");
+    step("connector transcribes what Plaud didn't (audio streamed to speech-to-text), searchable, no duplicates");
 
     const before = fake.state.calls.length;
     const again = text(await rpc("tools/call", { name: "sync_plaud", arguments: {} }));

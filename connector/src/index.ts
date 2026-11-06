@@ -14,6 +14,7 @@ import { consentPage, landingPage, messagePage, setupPage, type SetupView } from
 import { connectToken, PlaudBlocked, sendCode, tokenExpiry, verifyCode, type PlaudCreds } from "./plaud";
 import { pruneNotes, setSetting, getSetting, upsertFolder, upsertNote, type DeskNote } from "./store";
 import { syncPlaud, type SyncResult } from "./sync";
+import { engineLabel } from "./transcribe";
 
 export interface Env {
   OAUTH_KV: KVNamespace;
@@ -24,6 +25,13 @@ export interface Env {
   PUBLIC_ORIGIN?: string;
   /** Tests only: send Plaud API calls to a fake Plaud server. Never set in production. */
   PLAUD_API_OVERRIDE?: string;
+  /** Workers AI (speech-to-text with Deepgram Nova-3). */
+  AI?: Ai;
+  TRANSCRIBE_PROVIDER?: string;
+  TRANSCRIBE_BASE_URL?: string;
+  TRANSCRIBE_MODEL?: string;
+  TRANSCRIBE_API_KEY?: string;
+  TRANSCRIBE_LANGUAGE?: string;
   OAUTH_PROVIDER: OAuthHelpers;
 }
 
@@ -125,6 +133,7 @@ async function setupView(env: Env, origin: string, extra: Partial<SetupView> = {
     origin, nonce, notes: count?.n ?? 0,
     plaud: { connected: !!creds?.userToken, apiBase: creds?.apiBase, expires: creds?.userToken ? tokenExpiry(creds.userToken) : null },
     sync: await getSetting<SyncResult>(env.DB, "plaudSync"),
+    transcription: engineLabel(env),
     ...extra,
   };
 }
@@ -170,8 +179,9 @@ async function setup(request: Request, env: Env): Promise<Response> {
       return say(`Connected. Imported ${r.added} recording${r.added === 1 ? "" : "s"}. (If your Plaud account uses Apple or Google sign-in and nothing appears, use the bookmarklet instead.)`, !r.error);
     }
     if (action === "sync") {
-      const r = await syncPlaud(env, 10);
-      return say(r.error ? r.error : `Synced: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} still loading` : ""}.`, !r.error);
+      const r = await syncPlaud(env, 10, 100, 1);
+      return say(r.error ? r.error : `Synced: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} still loading` : ""}`
+        + `${r.transcribed ? `, ${r.transcribed} transcribed` : ""}${r.toTranscribe ? `, ${r.toTranscribe} waiting for transcription` : ""}.`, !r.error);
     }
     if (action === "disconnect") {
       await env.DB.prepare("DELETE FROM settings WHERE key IN ('plaud', 'plaudSync')").run();
@@ -295,6 +305,6 @@ export default {
 
   /** Cron (every 30 minutes): pull new Plaud recordings, transcripts and summaries. */
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(syncPlaud(env, 10));
+    ctx.waitUntil(syncPlaud(env, 10, 100, 3)); // + transcribe up to 3 recordings Plaud didn't
   },
 } satisfies ExportedHandler<Env>;

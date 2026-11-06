@@ -5,7 +5,8 @@
 import { noteIdForPlaud } from "./ids";
 import { Plaud, PlaudBlocked, PlaudError, type PlaudCreds } from "./plaud";
 import { clock, getNote, getSetting, listFolders, recentNotes, searchNotes, upsertNote, type DeskNote, type NoteRow } from "./store";
-import { syncPlaud, type SyncResult } from "./sync";
+import { syncPlaud, transcribeNote, type SyncResult } from "./sync";
+import { engineLabel, provider, type TranscribeEnv } from "./transcribe";
 
 export const SERVER_VERSION = "0.1.0";
 const PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -14,11 +15,12 @@ const MAX_RESULT = 140_000; // Claude's hosted limit is ~150k characters per too
 const INSTRUCTIONS = `This connector gives you the user's Plaud recordings as notes: titles, Plaud's AI summaries, timestamped transcripts (with speakers), and — when the Riff Pocket app is used — folders, its own summaries and attached files' text. It syncs from Plaud every 30 minutes.
 - Find notes with search_notes (keywords, folder, date range) or list_recent_notes, then read one with get_note.
 - If the user mentions a recording that isn't there yet, call sync_plaud, then search again.
+- Recordings Plaud didn't transcribe are transcribed by the connector automatically (a few every 30 minutes); if one the user needs has no transcript yet, call transcribe_recording.
 - Cite note titles and [hh:mm:ss] timestamps when you answer.
 - To save notes to Notion, use the Notion connector (if enabled) — see the save_to_notion prompt for the page layout.`;
 
 type Json = Record<string, any>;
-type Env = { DB: D1Database; PLAUD_API_OVERRIDE?: string };
+type Env = TranscribeEnv & { DB: D1Database; PLAUD_API_OVERRIDE?: string };
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
 
@@ -84,6 +86,21 @@ const TOOLS = [
     description: "Pull new and changed recordings (with Plaud's transcripts and summaries) from the user's Plaud account now, instead of waiting for the automatic 30-minute sync. Use when a recording the user mentions isn't found.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: "transcribe_recording",
+    title: "Transcribe a recording",
+    description: "Transcribe one recording now with the connector's speech-to-text (speaker labels). Use when get_note shows no transcript yet. Set force to redo an existing transcript.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id from search_notes or list_recent_notes." },
+        force: { type: "boolean", default: false, description: "Re-transcribe even if a transcript exists." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
     name: "plaud_recent_recordings",
@@ -240,7 +257,11 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       if (a.include_transcript !== false) {
         const max = Math.min(Math.max(Number(a.max_transcript_chars) || 60_000, 1_000), 120_000);
         const t = row.transcript_text ?? "";
-        parts.push("", "## Transcript", t ? (t.length > max ? t.slice(0, max) + `\n… (truncated; ${t.length - max} more characters)` : t) : "_No transcript yet._");
+        const none = provider(env) === "off"
+          ? "_No transcript (Plaud hasn't transcribed this recording, and the connector's transcription is off)._"
+          : "_No transcript yet — call transcribe_recording to transcribe it now._";
+        parts.push("", "## Transcript", t ? (t.length > max ? t.slice(0, max) + `\n… (truncated; ${t.length - max} more characters)` : t) : none);
+        if (t && row.plaud_id && doc.transcriptSource && doc.transcriptSource !== "plaud") parts.push("", `_Transcribed by ${doc.transcriptSource}._`);
       }
       return parts.join("\n");
     }
@@ -249,9 +270,22 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       return folders.length ? folders.map((f) => `- ${f.name} (${f.count})`).join("\n") : "No folders yet.";
     }
     case "sync_plaud": {
-      const r: SyncResult = await syncPlaud(env, 10);
+      const r: SyncResult = await syncPlaud(env, 10, 100, 1);
       if (r.error) throw r.blocked ? new PlaudBlocked(r.error) : new ToolError(r.error);
-      return `Checked ${r.listed} recent recordings: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} more still loading (call sync_plaud again)` : ""}.`;
+      return `Checked ${r.listed} recent recordings: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} more still loading (call sync_plaud again)` : ""}.`
+        + (r.transcribed ? ` Transcribed ${r.transcribed}.` : "")
+        + (r.toTranscribe ? ` ${r.toTranscribe} recording${r.toTranscribe === 1 ? "" : "s"} still waiting for transcription (automatic, or use transcribe_recording).` : "");
+    }
+    case "transcribe_recording": {
+      if (provider(env) === "off") throw new ToolError("The connector's transcription is turned off. Set TRANSCRIBE_PROVIDER (see the connector README).");
+      const row = await getNote(env.DB, String(a.id ?? ""));
+      if (!row) throw new ToolError(`No note with id ${a.id}.`);
+      if (!row.plaud_id) throw new ToolError("This note didn't come from Plaud, so there's no audio here to transcribe.");
+      if (row.transcript_text && !a.force) return "This recording already has a transcript — use get_note, or pass force: true to redo it.";
+      const doc = await transcribeNote(env, await plaudClient(env), JSON.parse(row.doc));
+      if (!doc.transcript?.segments?.length) throw new ToolError(`Couldn't transcribe it: ${doc.transcribeError ?? "unknown error"}`);
+      const minutes = Math.round((doc.duration || 0) / 60);
+      return `Transcribed “${doc.title}” (${minutes} min, ${doc.transcript.segments.length} segments) with ${engineLabel(env)}. Use get_note to read it.`;
     }
     case "plaud_recent_recordings": {
       const plaud = await plaudClient(env);

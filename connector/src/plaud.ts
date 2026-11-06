@@ -147,8 +147,10 @@ export class Plaud {
   private v4 = false;
   private detailCache = new Map<string, any>();
   workspaceId?: string | null;
+  private creds: PlaudCreds;
 
-  constructor(private creds: PlaudCreds, private override?: string) {
+  constructor(creds: PlaudCreds, override?: string) {
+    this.creds = creds;
     this.base = baseFor(creds.apiBase, override);
     this.workspaceId = creds.workspaceId;
   }
@@ -222,6 +224,37 @@ export class Plaud {
       this.detailCache.set(fid, r.data);
     }
     return this.detailCache.get(fid);
+  }
+
+  /** A short-lived download URL for the recording's audio (MP3 on classic accounts). */
+  async audioUrl(id: string): Promise<string> {
+    if (!this.v4) {
+      const r = await this.data(`file/temp-url/${encodeURIComponent(id)}?is_opus=0`);
+      if (r?.temp_url) return r.temp_url;
+      if (!migrated(r)) throw new PlaudError(r?.msg || "Plaud gave no download link for this recording.");
+      this.v4 = true;
+    }
+    const d = await this.v4Detail(id);
+    const audio = (d.objects ?? []).find((o: any) => o.object_type === "AUDIO") ?? {};
+    if (audio.content_url) return audio.content_url;
+    if (audio.content_id) {
+      const r = await this.data("file-app/v4/files/content/url", { method: "POST", body: JSON.stringify({ content_ids: [audio.content_id] }) });
+      const url = r?.status === 0 ? r?.data?.url_map?.[audio.content_id] : null;
+      if (url) return url;
+    }
+    throw new PlaudError("Plaud has no downloadable audio for this recording yet.");
+  }
+
+  /** Opens the audio as a stream (never buffered in the Worker) with its content type. */
+  async audio(id: string): Promise<{ body: ReadableStream; contentType: string }> {
+    const url = await this.audioUrl(id);
+    const res = await fetch(url, { headers: { "User-Agent": UA } });
+    if (!res.ok || !res.body) throw new PlaudError(`Couldn't download the audio (HTTP ${res.status}).`);
+    const header = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+    const ext = new URL(url).pathname.split(".").pop()?.toLowerCase() ?? "";
+    const byExt: Record<string, string> = { mp3: "audio/mpeg", m4a: "audio/mp4", mp4: "audio/mp4", ogg: "audio/ogg", opus: "audio/ogg", wav: "audio/wav", webm: "audio/webm" };
+    const contentType = header.startsWith("audio/") ? header : byExt[ext] ?? "audio/mpeg";
+    return { body: res.body, contentType };
   }
 
   private async fetchContent(link: string): Promise<any> {
