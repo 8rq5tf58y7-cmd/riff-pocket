@@ -1,6 +1,7 @@
 import Foundation
 import FoundationModels
 import WhisperKit
+import CoreML
 import RiffCore
 
 // MARK: - Apple Foundation Models (built into iOS 26, ~3B, free, private)
@@ -44,7 +45,12 @@ actor WhisperKitCache {
     func pipe(model: String) async throws -> WhisperKit {
         if let p = pipes[model] { return p }
         // Downloads the CoreML model on first use (base ≈ 150 MB, small ≈ 500 MB).
-        let p = try await WhisperKit(WhisperKitConfig(model: model))
+        // CPU + Neural Engine only: iOS forbids GPU work in the background, and this keeps
+        // transcription running when you leave the app mid-way.
+        let compute = ModelComputeOptions(melCompute: .cpuOnly,
+                                          audioEncoderCompute: .cpuAndNeuralEngine,
+                                          textDecoderCompute: .cpuAndNeuralEngine)
+        let p = try await WhisperKit(WhisperKitConfig(model: model, computeOptions: compute))
         pipes[model] = p
         return p
     }

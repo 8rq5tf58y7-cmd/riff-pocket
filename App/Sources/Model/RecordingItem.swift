@@ -29,9 +29,18 @@ final class RecordingItem {
     var summaryStyleData: Data?
     /// Set by background processing so it doesn't retry a failing note forever.
     var autoProcessFailures: Int = 0
+    /// The user named it; automatic (AI) titles leave it alone.
+    var titleLocked: Bool = false
+    /// Files attached to this note (deleted with it).
+    @Relationship(deleteRule: .cascade, inverse: \NoteAttachment.note)
+    var attachments: [NoteAttachment] = []
+    /// Last state agreed with the desktop companion (base for 3-way merges). nil = never synced.
+    var deskSnapshotData: Data?
+    var deskUpdatedAt: Date?
 
-    init(title: String, createdAt: Date = .now, duration: Double, audioFileName: String, source: String) {
-        self.id = UUID()
+    init(title: String, createdAt: Date = .now, duration: Double, audioFileName: String, source: String,
+         id: UUID = UUID()) {
+        self.id = id
         self.title = title
         self.createdAt = createdAt
         self.duration = duration
@@ -40,6 +49,11 @@ final class RecordingItem {
     }
 
     var audioURL: URL { RecordingStorage.directory.appendingPathComponent(audioFileName) }
+
+    var hasAudioFile: Bool { !audioFileName.isEmpty && FileManager.default.fileExists(atPath: audioURL.path) }
+
+    /// Text of attached files, for Ask / Library chat.
+    var documents: [NoteDocument] { attachments.sorted { $0.addedAt < $1.addedAt }.compactMap(\.document) }
 
     var summaryStyle: SummaryStyle? {
         get { summaryStyleData.flatMap { try? JSONDecoder().decode(SummaryStyle.self, from: $0) } }

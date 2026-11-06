@@ -118,10 +118,19 @@ public enum PlaudV4 {
         var version_ms: Double?
     }
 
+    struct Node: Decodable {
+        var node_id: String?
+        var version_ms: Double?
+    }
+
     struct FileDetail: Decodable {
+        var node: Node?
         var meta: FileMeta?
         var objects: [FileObject]?
     }
+
+    /// `/file-app/v4/nodes/rename` with a stale `origin_version`.
+    public static let versionConflictStatus = -1_800_313
 
     struct FileDetailResponse: Decodable {
         var status: Int?

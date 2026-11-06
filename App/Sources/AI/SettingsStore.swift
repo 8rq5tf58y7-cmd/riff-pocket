@@ -37,6 +37,18 @@ struct AppSettings: Codable, Equatable {
     var processOnlyWhileCharging = true
     var notifications = true
 
+    // Naming
+    /// After summarizing, name the note from its content (Plaud-style).
+    var autoTitle = true
+    /// Also replace titles that aren't placeholders (e.g. Plaud's own names). Hand-named notes are never touched.
+    var retitleNamedNotes = true
+    /// Mirror AI titles back to the recording in Plaud.
+    var renameInPlaud = false
+
+    // Desktop companion (token lives in the Keychain)
+    var deskURL = ""
+    var deskEnabled = false
+
     init() {}
 
     /// Tolerant decoding so settings saved by older builds keep working when fields are added.
@@ -56,6 +68,11 @@ struct AppSettings: Codable, Equatable {
         autoSummarize = (try? c.decode(Bool.self, forKey: .autoSummarize)) ?? d.autoSummarize
         processOnlyWhileCharging = (try? c.decode(Bool.self, forKey: .processOnlyWhileCharging)) ?? d.processOnlyWhileCharging
         notifications = (try? c.decode(Bool.self, forKey: .notifications)) ?? d.notifications
+        autoTitle = (try? c.decode(Bool.self, forKey: .autoTitle)) ?? d.autoTitle
+        retitleNamedNotes = (try? c.decode(Bool.self, forKey: .retitleNamedNotes)) ?? d.retitleNamedNotes
+        renameInPlaud = (try? c.decode(Bool.self, forKey: .renameInPlaud)) ?? d.renameInPlaud
+        deskURL = (try? c.decode(String.self, forKey: .deskURL)) ?? d.deskURL
+        deskEnabled = (try? c.decode(Bool.self, forKey: .deskEnabled)) ?? d.deskEnabled
         // Transcription via Ollama was never possible (no speech-to-text endpoint).
         if !transcribe.kind.canTranscribe { transcribe = d.transcribe }
     }

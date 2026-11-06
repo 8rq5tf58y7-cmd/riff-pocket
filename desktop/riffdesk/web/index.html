@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Riff Desk</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="spark">✻</span> Riff Desk</div>
+      <button class="primary wide" id="chatBtn">Chat with notes</button>
+      <nav id="folders"></nav>
+      <button class="ghost wide" id="newFolderBtn">+ New folder</button>
+      <div class="sidebar-foot">
+        <div id="workerStatus" class="mono muted"></div>
+        <label class="ghost wide upload">Import audio…<input type="file" id="importAudio" accept="audio/*" multiple hidden></label>
+        <button class="ghost wide" id="settingsBtn">Settings &amp; pairing</button>
+      </div>
+    </aside>
+
+    <section class="list">
+      <div class="list-head">
+        <input id="search" type="search" placeholder="Search notes">
+      </div>
+      <div id="pendingBanner" class="banner hidden"></div>
+      <div id="notes"></div>
+    </section>
+
+    <main class="detail" id="detail">
+      <div class="empty">
+        <div class="spark big">✻</div>
+        <h2>Pick a note</h2>
+        <p class="muted">Notes sync with Riff Pocket on your iPhone. New Plaud recordings are transcribed, summarized and named here while your phone sleeps.</p>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="settings">
+    <form method="dialog" class="sheet" id="settingsForm">
+      <header><h2>Settings</h2><button class="ghost" value="close">Done</button></header>
+
+      <h3>Pair your iPhone</h3>
+      <p class="muted">In Riff Pocket open <b>Settings → Desktop companion → Scan pairing code</b>, or point the iPhone Camera at this code. Your phone and this computer must be on the same Wi-Fi (or Tailscale).</p>
+      <div class="pair">
+        <div id="qr" class="qr"></div>
+        <div class="pair-info">
+          <div class="mono small" id="pairUrls"></div>
+          <button type="button" class="ghost" id="copyLink">Copy pairing link</button>
+          <button type="button" class="ghost danger" id="resetToken">Reset pairing (unpairs devices)</button>
+        </div>
+      </div>
+
+      <h3>Plaud</h3>
+      <p class="muted" id="plaudStatus"></p>
+      <div class="row">
+        <label>Check every <input type="number" min="0" step="5" id="plaudMinutes" class="narrow"> minutes</label>
+        <button type="button" class="ghost" id="plaudSync">Sync now</button>
+        <button type="button" class="ghost danger" id="plaudDisconnect">Disconnect</button>
+      </div>
+
+      <h3>Transcription</h3>
+      <div class="grid">
+        <label>Engine
+          <select id="tKind">
+            <option value="none">Off</option>
+            <option value="openai">OpenAI-compatible Whisper (OpenAI, Groq, local server)</option>
+            <option value="faster-whisper">faster-whisper on this computer</option>
+          </select>
+        </label>
+        <label>Base URL <input id="tBase" placeholder="https://api.openai.com/v1"></label>
+        <label>Model <input id="tModel" placeholder="whisper-1 / small"></label>
+        <label>API key <input id="tKey" type="password" autocomplete="off"></label>
+      </div>
+
+      <h3>Summaries, titles &amp; chat</h3>
+      <div class="grid">
+        <label>Source
+          <select id="cKind">
+            <option value="ollama">Ollama (this computer)</option>
+            <option value="ollamaCloud">Ollama Cloud</option>
+            <option value="openai">OpenAI-compatible</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </label>
+        <label>Base URL <input id="cBase" placeholder="http://localhost:11434"></label>
+        <label>Model <input id="cModel" placeholder="llama3.2 / claude-opus-5-5"></label>
+        <label>API key <input id="cKey" type="password" autocomplete="off"></label>
+      </div>
+
+      <h3>Automatic processing</h3>
+      <div class="row wrap">
+        <label class="check"><input type="checkbox" id="autoTranscribe"> Transcribe new notes</label>
+        <label class="check"><input type="checkbox" id="autoSummarize"> Summarize new notes</label>
+        <label class="check"><input type="checkbox" id="autoTitle"> Name notes from their content</label>
+      </div>
+      <p class="muted small">Summary format follows each note's style from the iPhone (and your default template there).</p>
+
+      <footer><button type="button" class="primary" id="saveSettings">Save settings</button><span id="saveMsg" class="muted small"></span></footer>
+    </form>
+  </dialog>
+
+  <template id="chatTpl">
+    <div class="chat">
+      <div class="chat-head"><h2 class="serif chat-title"></h2><select class="scope"></select></div>
+      <div class="messages"></div>
+      <form class="composer">
+        <textarea rows="1" placeholder="Ask your notes…"></textarea>
+        <div class="composer-row"><span class="mono muted small model"></span><button class="send" title="Send">↑</button></div>
+      </form>
+    </div>
+  </template>
+</body>
+</html>

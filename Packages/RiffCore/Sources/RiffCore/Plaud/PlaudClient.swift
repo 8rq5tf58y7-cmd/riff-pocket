@@ -233,6 +233,36 @@ public actor PlaudClient {
         return dest
     }
 
+    /// Renames the recording in Plaud too (legacy PATCH /file/{id}; Plaud 4.0 nodes/rename with
+    /// origin_version, refetching and retrying once on a version conflict — as Riffado PR #328 does).
+    public func rename(fileId: String, to name: String) async throws {
+        if !usingV4 {
+            let body = try JSONSerialization.data(withJSONObject: ["filename": name])
+            let resp = try await dataRequest("file/\(fileId)", method: "PATCH", body: body, as: PlaudStatusOnly.self)
+            if resp.status == 0 || resp.status == nil { return }
+            guard PlaudV4.isMigrated(status: resp.status, msg: resp.msg) else {
+                throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Rename failed")
+            }
+            usingV4 = true
+        }
+        for attempt in 0..<2 {
+            v4DetailCache[PlaudV4.fileId(fromRecordingId: fileId)] = nil // need the current version
+            let detail = try await v4Detail(recordingId: fileId)
+            guard let nodeId = detail.node?.node_id else {
+                throw PlaudError.api(status: -1, message: "Plaud didn't return a node to rename")
+            }
+            var payload: [String: Any] = ["name": name]
+            if let v = detail.node?.version_ms { payload["origin_version"] = v }
+            let escaped = nodeId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? nodeId
+            let resp = try await dataRequest("file-app/v4/nodes/rename/\(escaped)", method: "PATCH",
+                                             body: try JSONSerialization.data(withJSONObject: payload),
+                                             as: PlaudStatusOnly.self)
+            if resp.status == 0 { return }
+            if resp.status == PlaudV4.versionConflictStatus && attempt == 0 { continue }
+            throw PlaudError.api(status: resp.status ?? -1, message: resp.msg ?? "Rename failed")
+        }
+    }
+
     public func fileDetail(fileId: String) async throws -> PlaudFileDetail? {
         if !usingV4 {
             let resp = try await dataRequest("file/detail/\(fileId)", as: PlaudFileDetailResponse.self)

@@ -15,6 +15,8 @@ struct SettingsView: View {
                 plaudSection
                 modelsSection
                 summariesSection
+                namingSection
+                deskSection
                 backgroundSection
                 Section {
                     Toggle("Use Plaud's transcript & summary when available", isOn: $settings.settings.preferPlaudContent)
@@ -116,6 +118,38 @@ struct SettingsView: View {
             }
         } header: { SectionLabel("Summaries") } footer: {
             Text("Pick the default format, length and sections for new notes, or make your own templates.")
+        }
+    }
+
+    // MARK: Naming
+
+    private var namingSection: some View {
+        Section {
+            Toggle("Name notes from their content", isOn: $settings.settings.autoTitle)
+            if settings.settings.autoTitle {
+                Toggle("Also replace existing names", isOn: $settings.settings.retitleNamedNotes)
+                Toggle("Rename in Plaud too", isOn: $settings.settings.renameInPlaud)
+            }
+        } header: { SectionLabel("Naming") } footer: {
+            Text("After summarizing, the note gets a short, specific title like Plaud's (e.g. “Sprint Planning Q4 Roadmap”). Names you type yourself are never replaced.")
+        }
+    }
+
+    // MARK: Desktop
+
+    private var deskSection: some View {
+        Section {
+            NavigationLink {
+                DeskSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(DeskSync.shared.isPaired ? "Paired" : "Not paired").font(Theme.mono)
+                } label: {
+                    Label("Desktop companion", systemImage: "desktopcomputer")
+                }
+            }
+        } footer: {
+            Text("Riff Desk syncs your notes with your computer and processes new recordings there — even while your phone is locked.")
         }
     }
 

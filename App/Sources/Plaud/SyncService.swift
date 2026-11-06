@@ -43,7 +43,8 @@ final class SyncService: ObservableObject {
                     createdAt: rec.startedAt ?? .now,
                     duration: duration,
                     audioFileName: file.lastPathComponent,
-                    source: "plaud"
+                    source: "plaud",
+                    id: UUID(uuidString: NoteID.forPlaud(rec.id)) ?? UUID()
                 )
                 item.plaudId = rec.id
                 item.plaudVersion = rec.versionMarker

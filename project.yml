@@ -74,6 +74,10 @@ targets:
         BGTaskSchedulerPermittedIdentifiers:
           - io.github.riffpocket.app.refresh
           - io.github.riffpocket.app.process
+          - io.github.riffpocket.app.pipeline
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.riffpocket.app
+            CFBundleURLSchemes: [riffpocket]
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
 

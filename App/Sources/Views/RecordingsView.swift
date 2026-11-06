@@ -8,6 +8,7 @@ struct RecordingsView: View {
     @EnvironmentObject private var account: PlaudAccount
     @EnvironmentObject private var sync: SyncService
     @EnvironmentObject private var settings: SettingsStore
+    @ObservedObject private var pipeline = Pipeline.shared
     @Query(sort: \RecordingItem.createdAt, order: .reverse) private var recordings: [RecordingItem]
     @Query(sort: \Folder.name) private var folders: [Folder]
 
@@ -75,6 +76,13 @@ struct RecordingsView: View {
         }
     }
 
+    /// Notes with audio but no transcript, or a transcript but no summary.
+    private var waiting: [RecordingItem] {
+        recordings.filter { r in
+            r.autoProcessFailures < 2 && ((r.transcriptData == nil && r.hasAudioFile) || (r.transcriptData != nil && r.summary == nil))
+        }
+    }
+
     // MARK: Sections
 
     private struct DayGroup { let day: String; let items: [RecordingItem] }
@@ -117,6 +125,36 @@ struct RecordingsView: View {
             .buttonStyle(.plain)
             .listRowSeparator(.hidden)
             .listRowBackground(Theme.background)
+        }
+        if let active = pipeline.activeNoteId, let rec = recordings.first(where: { $0.id == active }) {
+            HStack {
+                ThinkingIndicator(label: "\(pipeline.stepLabel ?? "Processing") “\(rec.title)”")
+                if !pipeline.queued.isEmpty { Text("+\(pipeline.queued.count)").font(Theme.mono).foregroundStyle(Theme.secondary) }
+            }
+            .listRowSeparator(.hidden).listRowBackground(Theme.background)
+        } else if !waiting.isEmpty {
+            Button { Pipeline.shared.start(ids: waiting.map(\.id)) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles").font(.title3).foregroundStyle(Theme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(waiting.count) note\(waiting.count == 1 ? "" : "s") waiting").font(Theme.serif(17, .semibold))
+                            .foregroundStyle(Theme.text)
+                        Text("Transcribe, summarize and name them. Keeps going if you leave the app.")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer()
+                    Text("Process").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 6).background(Theme.accent, in: .capsule)
+                }
+                .card()
+            }
+            .buttonStyle(.plain)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Theme.background)
+        }
+        if let err = pipeline.lastError {
+            Text(err).font(.footnote).foregroundStyle(.red).listRowBackground(Theme.background)
+                .onTapGesture { pipeline.lastError = nil }
         }
         if let status = sync.status {
             ThinkingIndicator(label: status.replacingOccurrences(of: "…", with: ""))
@@ -183,7 +221,7 @@ struct RecordingsView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Sync now", systemImage: "arrow.triangle.2.circlepath") { Task { await runSync() } }
-                    .disabled(!account.isConnected || sync.isSyncing)
+                    .disabled((!account.isConnected && !settings.settings.deskEnabled) || sync.isSyncing)
                 Button("Import audio…", systemImage: "square.and.arrow.down") { importing = true }
                 Button("Manage folders…", systemImage: "folder.badge.gearshape") { showFolders = true }
             } label: {
@@ -209,7 +247,16 @@ struct RecordingsView: View {
 
     private func runSync() async {
         await BackgroundWork.withExtendedTime("Sync") {
-            await sync.sync(account: account, context: context, usePlaudContent: settings.settings.preferPlaudContent)
+            if account.isConnected {
+                await sync.sync(account: account, context: context, usePlaudContent: settings.settings.preferPlaudContent)
+            }
+            await DeskSync.shared.sync(context: context)
+        }
+        // A pull-to-refresh is a user action, so new work can run as a continued task.
+        let s = settings.settings
+        if s.autoTranscribe || s.autoSummarize {
+            let ids = BackgroundWork.candidates(context: context).map(\.id)
+            if !ids.isEmpty { Pipeline.shared.start(ids: ids) }
         }
     }
 

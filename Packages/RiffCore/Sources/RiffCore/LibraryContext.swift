@@ -7,17 +7,22 @@ public struct NoteSource: Sendable, Hashable {
     public var date: Date
     public var transcript: Transcript?
     public var summary: String?
+    /// Text of files attached to the note.
+    public var documents: [NoteDocument]
 
-    public init(id: String, title: String, date: Date, transcript: Transcript?, summary: String?) {
+    public init(id: String, title: String, date: Date, transcript: Transcript?, summary: String?,
+                documents: [NoteDocument] = []) {
         self.id = id
         self.title = title
         self.date = date
         self.transcript = transcript
         self.summary = summary
+        self.documents = documents
     }
 
     public var hasContent: Bool {
         !(transcript?.segments.isEmpty ?? true) || !(summary ?? "").isEmpty
+            || documents.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }
 
@@ -72,6 +77,13 @@ public enum LibraryContext {
             if let t = note.transcript {
                 for (j, chunk) in Summarizer.chunk(t, maxCharacters: chunkSize).enumerated() {
                     pieces.append(Piece(note: i, order: j, text: chunk, score: score(chunk)))
+                }
+            }
+            for (d, doc) in note.documents.enumerated() {
+                let lines = doc.text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                for (j, chunk) in Summarizer.chunk(lines: lines, maxCharacters: chunkSize).enumerated() {
+                    pieces.append(Piece(note: i, order: 10_000 * (d + 1) + j,
+                                        text: "From attachment “\(doc.name)”: \(chunk)", score: score(chunk)))
                 }
             }
         }

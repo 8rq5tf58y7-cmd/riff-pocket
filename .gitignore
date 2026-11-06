@@ -23,3 +23,7 @@ Thumbs.db
 *.p8
 *.mobileprovision
 .env
+
+# Python
+__pycache__/
+*.pyc

@@ -59,6 +59,7 @@ enum NoteScope: Hashable {
 
 extension RecordingItem {
     var noteSource: NoteSource {
-        NoteSource(id: id.uuidString, title: title, date: createdAt, transcript: transcript, summary: summary)
+        NoteSource(id: id.uuidString, title: title, date: createdAt, transcript: transcript, summary: summary,
+                   documents: documents)
     }
 }

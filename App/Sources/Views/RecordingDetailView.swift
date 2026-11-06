@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
+import PhotosUI
+import QuickLook
 import RiffCore
 
 struct RecordingDetailView: View {
@@ -10,8 +12,13 @@ struct RecordingDetailView: View {
     @EnvironmentObject private var account: PlaudAccount
     @Query(sort: \Folder.name) private var folders: [Folder]
     @StateObject private var player = AudioPlayer()
+    @ObservedObject private var pipeline = Pipeline.shared
+    @State private var importingFile = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var previewURL: URL?
+    @State private var addingFile = false
 
-    enum DetailTab: String, CaseIterable { case summary = "Summary", transcript = "Transcript", ask = "Ask" }
+    enum DetailTab: String, CaseIterable { case summary = "Summary", transcript = "Transcript", ask = "Ask", files = "Files" }
 
     @State private var tab: DetailTab = .summary
     @State private var busy: String?
@@ -22,6 +29,14 @@ struct RecordingDetailView: View {
     @State private var chat: [ChatMessage] = []
     @State private var summaryModel: ProviderConfig?
     @State private var askModel: ProviderConfig?
+
+    /// What's happening to this note right now (pipeline step, queued, or a local action).
+    private var activity: String? {
+        if let busy { return busy }
+        if pipeline.activeNoteId == recording.id { return pipeline.stepLabel ?? "Processing" }
+        if pipeline.queued.contains(recording.id) { return "Queued" }
+        return nil
+    }
 
     private var summaryConfig: Binding<ProviderConfig> {
         Binding(get: { summaryModel ?? settings.settings.summarize }, set: { summaryModel = $0 })
@@ -39,6 +54,7 @@ struct RecordingDetailView: View {
                 case .summary: summaryView
                 case .transcript: transcriptView
                 case .ask: askView
+                case .files: filesView
                 }
             }
             .frame(maxHeight: .infinity)
@@ -67,7 +83,10 @@ struct RecordingDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Title", text: $recording.title, axis: .vertical)
+            // Typing a name locks it: automatic (AI) titles won't replace it.
+            TextField("Title", text: Binding(get: { recording.title },
+                                             set: { recording.title = $0; recording.titleLocked = true }),
+                      axis: .vertical)
                 .font(Theme.serif(24, .medium))
                 .lineLimit(1...3)
             HStack(spacing: 8) {
@@ -153,14 +172,14 @@ struct RecordingDetailView: View {
                     ModelChip(config: summaryConfig, task: .summarize) { settings.settings.summarize = $0 }
                     Spacer()
                 }
-                if let b = busy, tab == .summary {
+                if let b = activity, b != "Thinking" {
                     ThinkingIndicator(label: b)
                 } else if let summary = recording.summary {
                     if let source = recording.summarySource {
                         SectionLabel(source == "plaud" ? "From Plaud" : "By \(source)")
                     }
                     MarkdownText(summary)
-                    Button { Task { await summarize() } } label: {
+                    Button { summarize() } label: {
                         Label("Regenerate", systemImage: "arrow.clockwise").font(.subheadline)
                     }
                     .disabled(recording.transcript == nil)
@@ -169,9 +188,9 @@ struct RecordingDetailView: View {
                     emptyCard(
                         title: recording.transcript == nil ? "Transcribe first" : "No summary yet",
                         body: recording.transcript == nil
-                            ? "A summary needs a transcript. Transcribe this recording, or fetch Plaud's."
-                            : "Summarize with \(summaryConfig.wrappedValue.chipLabel).",
-                        action: recording.transcript == nil ? ("Transcribe", startTranscribe) : ("Summarize", startSummarize)
+                            ? "Transcribe, summarize and name this note in one go. It keeps running if you leave the app."
+                            : "Summarize with \(summaryConfig.wrappedValue.chipLabel), then name the note from its content.",
+                        action: recording.transcript == nil ? ("Transcribe & summarize", processAll) : ("Summarize", summarize)
                     )
                 }
             }
@@ -183,7 +202,7 @@ struct RecordingDetailView: View {
 
     @ViewBuilder
     private var transcriptView: some View {
-        if let b = busy, tab == .transcript {
+        if let b = activity, b != "Thinking", recording.transcript == nil {
             VStack { ThinkingIndicator(label: b).padding(.top, 40); Spacer() }
         } else if let t = recording.transcript, !t.segments.isEmpty {
             ScrollView {
@@ -215,7 +234,7 @@ struct RecordingDetailView: View {
                 emptyCard(
                     title: "No transcript",
                     body: "Transcribe with \(settings.settings.transcribe.chipLabel)\(recording.plaudId != nil ? ", or fetch Plaud's own" : "").",
-                    action: ("Transcribe", startTranscribe)
+                    action: ("Transcribe & summarize", processAll)
                 )
                 .padding(.horizontal, 18)
             }
@@ -228,17 +247,107 @@ struct RecordingDetailView: View {
         VStack(spacing: 0) {
             ChatTranscriptView(
                 messages: chat,
-                isThinking: busy != nil && tab == .ask,
+                isThinking: busy == "Thinking",
                 greeting: "Ask about this note",
-                subtitle: recording.transcript == nil ? "Transcribe it first so there's something to read." : nil,
-                suggestions: recording.transcript == nil ? [] : [
+                subtitle: canAsk
+                    ? (recording.attachments.isEmpty ? nil : "Reads the recording and \(recording.attachments.count) attached file\(recording.attachments.count == 1 ? "" : "s").")
+                    : "Transcribe it or attach a file first so there's something to read.",
+                suggestions: !canAsk ? [] : [
                     "What were the decisions?", "List the action items with owners", "What questions were left open?",
                 ],
                 onSuggestion: { draft = $0; Task { await ask() } }
             )
             Composer(text: $draft, placeholder: "Ask about this note…", isBusy: busy != nil,
-                     isEnabled: recording.transcript != nil, onSend: { Task { await ask() } }) {
+                     isEnabled: canAsk, onSend: { Task { await ask() } }) {
                 ModelChip(config: askConfig, task: .chat) { settings.settings.chat = $0 }
+            }
+        }
+    }
+
+    // MARK: Files
+
+    private var filesView: some View {
+        List {
+            Section {
+                ForEach(recording.attachments.sorted { $0.addedAt < $1.addedAt }) { att in
+                    Button { previewURL = att.hasLocalFile ? att.fileURL : nil } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: att.symbol).font(.title3).foregroundStyle(Theme.accent).frame(width: 28)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(att.name).foregroundStyle(Theme.text).lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Text(ByteCountFormatter.string(fromByteCount: Int64(att.size), countStyle: .file))
+                                    if att.extractedText != nil {
+                                        StatusPill(text: "used by Ask", systemImage: "text.magnifyingglass", color: Theme.success)
+                                    } else {
+                                        StatusPill(text: "no readable text", color: Theme.secondary)
+                                    }
+                                }
+                                .font(Theme.monoSmall).foregroundStyle(Theme.secondary)
+                            }
+                        }
+                    }
+                    .listRowBackground(Theme.background)
+                    .swipeActions {
+                        Button("Delete", role: .destructive) { AttachmentStorage.delete(att, context: context) }
+                    }
+                }
+                if addingFile { ThinkingIndicator(label: "Reading file").listRowBackground(Theme.background) }
+            } footer: {
+                Text("PDFs, text, Markdown, CSV, RTF/HTML and photos (text is read on-device) are included when you Ask about this note and in Library chat. For Word or Pages files, export to PDF first.")
+            }
+        }
+        .listStyle(.plain)
+        .themedList()
+        .overlay {
+            if recording.attachments.isEmpty && !addingFile {
+                VStack(spacing: 10) {
+                    Image(systemName: "paperclip").font(.system(size: 28)).foregroundStyle(Theme.accent)
+                    Text("Attach files to this note").font(Theme.serif(20))
+                    Text("Slides, agendas, contracts, photos of a whiteboard — Ask reads them alongside the recording.")
+                        .font(.subheadline).foregroundStyle(Theme.secondary).multilineTextAlignment(.center)
+                }
+                .padding(32)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 10) {
+                Button { importingFile = true } label: { Label("Add file", systemImage: "doc.badge.plus") }
+                PhotosPicker(selection: $photoItems, maxSelectionCount: 10, matching: .images) {
+                    Label("Add photo", systemImage: "photo.badge.plus")
+                }
+            }
+            .buttonStyle(.bordered)
+            .padding(10)
+        }
+        .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            Task { await addFiles(result) }
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await addPhotos(items) }
+        }
+        .quickLookPreview($previewURL)
+    }
+
+    private func addFiles(_ result: Result<[URL], Error>) async {
+        addingFile = true
+        defer { addingFile = false }
+        do {
+            for url in try result.get() {
+                _ = try await AttachmentStorage.importFile(from: url, into: recording, context: context)
+            }
+        } catch {
+            errorText = errorMessage(error)
+        }
+    }
+
+    private func addPhotos(_ items: [PhotosPickerItem]) async {
+        addingFile = true
+        defer { addingFile = false; photoItems = [] }
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                _ = try? await AttachmentStorage.importImage(data, into: recording, context: context)
             }
         }
     }
@@ -275,7 +384,9 @@ struct RecordingDetailView: View {
                 if recording.plaudId != nil {
                     Button("Get Plaud's transcript & summary", systemImage: "icloud.and.arrow.down") { Task { await fetchPlaudContent() } }
                 }
-                Button("Transcribe on this iPhone", systemImage: "waveform.badge.mic") { Task { await transcribe() } }
+                Button("Transcribe again", systemImage: "waveform.badge.mic") { retranscribe() }
+                Button("Rename from content", systemImage: "character.cursor.ibeam") { renameFromContent() }
+                    .disabled(recording.transcript == nil && recording.summary == nil)
                 Divider()
                 ShareLink(item: recording.audioURL) { Label("Share audio", systemImage: "square.and.arrow.up") }
                 if let t = recording.transcript {
@@ -290,47 +401,33 @@ struct RecordingDetailView: View {
 
     // MARK: Actions
 
-    private func startTranscribe() { Task { await transcribe() } }
-    private func startSummarize() { Task { await summarize() } }
+    private var canAsk: Bool { recording.transcript != nil || !recording.documents.isEmpty }
 
-    private func transcribe() async {
-        tab = .transcript
-        busy = "Transcribing"
-        defer { busy = nil }
-        do {
-            let transcriber = try AIRouter.transcriber(for: settings.settings.transcribe)
-            let lang = settings.settings.language.isEmpty ? nil : settings.settings.language
-            let url = recording.audioURL
-            recording.transcript = try await BackgroundWork.withExtendedTime("Transcribe") {
-                try await transcriber.transcribe(fileURL: url, language: lang)
-            }
-            recording.transcriptSource = transcriber.displayName
-            try? context.save()
-        } catch {
-            errorText = errorMessage(error)
-        }
+    /// Everything that's missing: transcript → summary → title. Continues in the background.
+    private func processAll() {
+        recording.summaryStyle = style
+        Pipeline.shared.start([.init(noteId: recording.id, steps: .all, style: style, summaryConfig: summaryConfig.wrappedValue)])
     }
 
-    private func summarize() async {
-        guard let t = recording.transcript else { return }
-        busy = "Summarizing"
-        defer { busy = nil }
-        do {
-            let model = try AIRouter.chatModel(for: summaryConfig.wrappedValue, task: .summarize)
-            let chosen = style
-            recording.summary = try await BackgroundWork.withExtendedTime("Summarize") {
-                try await Summarizer(model: model).summarize(t, style: chosen)
-            }
-            recording.summaryStyle = style
-            recording.summarySource = model.displayName
-            try? context.save()
-        } catch {
-            errorText = errorMessage(error)
-        }
+    private func retranscribe() {
+        tab = .transcript
+        Pipeline.shared.start([.init(noteId: recording.id, steps: [.transcribe], force: [.transcribe])])
+    }
+
+    private func summarize() {
+        recording.summaryStyle = style
+        Pipeline.shared.start([.init(noteId: recording.id, steps: [.summarize, .title], force: [.summarize],
+                                     style: style, summaryConfig: summaryConfig.wrappedValue)])
+    }
+
+    private func renameFromContent() {
+        recording.titleLocked = false
+        Pipeline.shared.start([.init(noteId: recording.id, steps: [.title], force: [.title],
+                                     summaryConfig: summaryConfig.wrappedValue)])
     }
 
     private func ask() async {
-        guard let t = recording.transcript else { return }
+        guard canAsk else { return }
         let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, busy == nil else { return }
         draft = ""
@@ -340,7 +437,9 @@ struct RecordingDetailView: View {
         defer { busy = nil }
         do {
             let model = try AIRouter.chatModel(for: askConfig.wrappedValue, task: .chat)
-            chat.append(.assistant(try await Summarizer(model: model).answer(q, transcript: t, history: history)))
+            let answer = try await Summarizer(model: model)
+                .answer(q, transcript: recording.transcript, documents: recording.documents, history: history)
+            chat.append(.assistant(answer))
         } catch {
             chat.removeLast()
             draft = q

@@ -116,6 +116,13 @@ No special entitlements are needed, so a free Apple ID works.
 
 Use the iPhone console (e.g. via 3uTools or idevicesyslog), error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
 
+## Desktop companion
+
+**[Riff Desk](desktop/README.md)** runs on your Windows, Mac or Linux computer (`python riffdesk.py`) and syncs with the iPhone.
+- **Processing while your phone sleeps:** it pulls new Plaud recordings and transcribes, summarizes and names them. Your phone downloads just the results.
+- **Desktop app:** a local web app for notes, folders, attachments and chat.
+- **Pairing:** scan its QR code with the iPhone Camera.
+
 ## Features
 
 - **Notes:** recordings synced from Plaud, mic recordings, or imported files. They're grouped by day, searchable, and can be sorted into **folders**.
@@ -123,6 +130,9 @@ Use the iPhone console (e.g. via 3uTools or idevicesyslog), error messages in th
 - **Chat tab (Library chat):** ask across **all notes**, **Unfiled**, or **one folder**. Long collections are handled by picking the most relevant excerpts and citing which note each answer came from.
 - **Model chip on every chat and summary:** switch the **source** and **model** on the fly. You can also set it as the default.
 - **Plaud 4.0 accounts:** these are detected automatically (status `-1800907`) and switched to the `/file-app/v4` API. This is ported from Riffado PR #328.
+- **AI naming:** after summarizing, each note gets a short, specific, Plaud-style title (for example "Sprint Planning Q4 Roadmap"). Names you type yourself are never replaced, and you can optionally rename the recording in Plaud too.
+- **Attachments:** add PDFs, text, Markdown, CSV, RTF or photos to a note. Their text, including on-device OCR for photos, is included in Ask and Library chat.
+- **Processing that survives leaving the app:** transcribe → summarize → name runs as an iOS 26 continued-processing task, with a system progress Live Activity. On-iPhone transcription stays off the GPU so it can continue in the background. iOS doesn't let on-iPhone LLMs (MLX) use the GPU in the background, so pair Riff Desk or use a cloud/Ollama model for summaries that finish while you're away.
 - **Summary styles:** set the format (bullets, prose, outline, Q&A), length, tone, sections, timestamps, language and your own instructions for each note. Eight built-in templates are included, you can save your own, and you can pick a default for new notes.
 - **While you're away:** background refresh syncs new Plaud recordings and notifies you. Background processing can auto-transcribe and summarize, optionally only while charging. Work you started finishes after you leave the app, and leftovers run when you return. iOS decides the timing, and on-iPhone MLX models only run in the foreground.
 - **Look:** warm ivory and charcoal surfaces, terracotta accent, serif headings, chat-style composer. Follows light and dark mode.
