@@ -124,7 +124,7 @@ openplaud/
 | Code | VS Code with the Swift extension |
 | Shared logic | Swift for Windows → `swift test` in `Packages/RiffCore` |
 | iOS build | GitHub Actions macOS runner (XcodeGen + `xcodebuild`) |
-| Install, free | Unsigned `.ipa` → **Sideloadly** with a free Apple ID (re-sign every 7 days) |
+| Install, free | Unsigned `.ipa` → **SideStore** on the iPhone (set up once with iloader on Windows; free Apple ID, auto-refresh every 7 days) |
 | Install, $99/yr | TestFlight from CI |
 | Debugging | OSLog and an in-app log view. Rent a cloud Mac occasionally if needed |
 

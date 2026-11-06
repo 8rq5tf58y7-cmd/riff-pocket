@@ -65,11 +65,40 @@ For editing, use VS Code with the **Swift** extension (swiftlang.swift-vscode).
 
 ### 3. Install on your iPhone 16
 
-**Free option: Sideloadly (Windows)**
-1. Install [Sideloadly](https://sideloadly.io) and iTunes (the non-Store version, for the USB driver).
-2. On the iPhone, turn on Settings → Privacy & Security → **Developer Mode**.
-3. Plug in the iPhone, drop in the `.ipa`, and sign with your Apple ID.
-4. The build expires after 7 days, so re-sideload it then.
+**Free option: [SideStore](https://sidestore.io)**
+
+SideStore runs on the iPhone and installs and refreshes apps itself. You need the Windows PC once, to set it up. Its full guide is at [docs.sidestore.io](https://docs.sidestore.io/docs/installation/prerequisites).
+
+*One-time setup*
+1. **On the iPhone:**
+   - Install **[LocalDevVPN](https://apps.apple.com/app/localdevvpn/id6755608044)** from the App Store.
+   - Open it, tap **Connect** and allow the VPN.
+   - You'll need Wi-Fi.
+2. **On the PC:**
+   - Install **[iTunes](https://www.apple.com/itunes/download/win64)** (Apple's direct download) for the iPhone USB driver.
+   - Install **[iloader](https://iloader.app)** ([MSI](https://github.com/nab138/iloader/releases/latest/download/iloader-windows-x64.msi)).
+3. Plug the iPhone in by USB and trust the computer.
+4. Open iloader, sign in with your Apple ID, pick your iPhone, and choose **Install SideStore (Stable)**.
+5. **Back on the iPhone:**
+   - Go to Settings → General → **VPN & Device Management**.
+   - Under *Developer App*, tap your Apple ID, then **Trust**.
+   - Then go to Settings → Privacy & Security → turn on **Developer Mode**. The phone restarts.
+6. Open **SideStore** and sign in with the same Apple ID.
+7. In **My Apps**, tap SideStore's **7 DAYS** counter to refresh it once.
+
+*Install Riff Pocket*
+1. Open the latest **iOS** run under [Actions](https://github.com/8rq5tf58y7-cmd/riff-pocket/actions) and download **RiffPocket-unsigned-ipa**.
+   - Downloading needs a signed-in GitHub account.
+   - On the iPhone, the zip lands in Files; tap it to unzip.
+   - Or download it on the PC and move `RiffPocket-unsigned.ipa` to the iPhone with iCloud Drive.
+2. Make sure **LocalDevVPN** is connected and you're on Wi-Fi.
+3. In SideStore → **My Apps**, tap **+** and pick `RiffPocket-unsigned.ipa`. SideStore signs it with your Apple ID and installs it.
+
+*Keeping it running*
+- **Refreshing:** free Apple ID signatures last **7 days**. SideStore refreshes apps in the background, or you can tap the app's day counter in My Apps. Keep LocalDevVPN connected and stay on Wi-Fi when it refreshes.
+- **Updating:** install a newer `.ipa` the same way. It replaces the old one and keeps your notes.
+- **Free Apple ID limits:** 3 active apps, including SideStore itself, and 10 new app IDs per week.
+- **If installs start failing:** your pairing file may have expired. This can happen after an iOS update or reset. Follow SideStore's pairing-file guide.
 
 No special entitlements are needed, so a free Apple ID works.
 
@@ -85,7 +114,7 @@ No special entitlements are needed, so a free Apple ID works.
 
 ### Debugging without Xcode
 
-Use console logs through the Sideloadly/3uTools device console, error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
+Use the iPhone console (e.g. via 3uTools or idevicesyslog), error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
 
 ## Features
 
