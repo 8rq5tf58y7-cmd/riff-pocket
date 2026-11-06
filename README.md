@@ -35,10 +35,10 @@ The token lasts about 300 days and is stored in the iOS Keychain. Pull down on R
 
 ### 1. Shared logic, locally (optional)
 
-**Already set up on this machine, through WSL Ubuntu** (Swift 6.4.2 via swiftly). From PowerShell:
+**Through WSL Ubuntu** (Swift 6.4+ via [swiftly](https://www.swift.org/install/linux/)). From PowerShell, with your clone path:
 
 ```powershell
-wsl -d Ubuntu -- bash -lc 'source ~/.local/share/swiftly/env.sh && cd /mnt/c/Users/ryanf/Downloads/openplaud && swift test --package-path Packages/RiffCore --scratch-path ~/riffcore-build'
+wsl -d Ubuntu -- bash -lc 'source ~/.local/share/swiftly/env.sh && cd /mnt/c/path/to/riff-pocket && swift test --package-path Packages/RiffCore --scratch-path ~/riffcore-build'
 ```
 
 Alternatively, install Swift for Windows natively. It needs Visual Studio Build Tools; follow https://www.swift.org/install/windows/ (winget):
@@ -122,4 +122,8 @@ Known gaps:
 
 ## License
 
-The Plaud sign-in and sync logic is ported from Riffado (AGPL-3.0), so this project should be **AGPL-3.0** too. Add a `LICENSE` file before publishing the repo.
+Licensed under the [GNU AGPL-3.0](LICENSE). The Plaud sign-in, sync and Plaud 4.0 logic is a Swift port of [Riffado](https://github.com/riffado/riffado) (AGPL-3.0), including its Plaud 4.0 support from [riffado/riffado#328](https://github.com/riffado/riffado/pull/328). Thanks to the Riffado contributors.
+
+## Disclaimer
+
+Riff Pocket is an independent project. It isn't affiliated with, endorsed by, or connected to Plaud. It uses Plaud's unofficial cloud API with your own account, which can change or break at any time. Check Plaud's terms before you use it. Your API keys and Plaud token are stored only in your iPhone's Keychain. Nothing is sent to the authors of this project.
