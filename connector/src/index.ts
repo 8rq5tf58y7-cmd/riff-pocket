@@ -4,13 +4,16 @@
  *   /mcp            MCP (Streamable HTTP), OAuth-protected (scope notes:read)
  *   /authorize      consent page: you approve Claude with your OWNER_PASSWORD
  *   /oauth/*, /.well-known/*   OAuth 2.1 server (DCR + CIMD + PKCE) — @cloudflare/workers-oauth-provider
- *   /api/v1/*       one-way sync from the Riff Pocket iPhone app (Bearer SYNC_KEY)
+ *   /setup          connect your Plaud account (password-protected); cron syncs it every 30 min
+ *   /api/v1/*       optional one-way mirror from the Riff Pocket iPhone app (Bearer SYNC_KEY)
  *   /               landing page with setup steps
  */
 import { AuthorizationError, OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { mcpFetch, SERVER_VERSION } from "./mcp";
-import { consentPage, landingPage, messagePage } from "./pages";
+import { consentPage, landingPage, messagePage, setupPage, type SetupView } from "./pages";
+import { connectToken, PlaudBlocked, sendCode, tokenExpiry, verifyCode, type PlaudCreds } from "./plaud";
 import { pruneNotes, setSetting, getSetting, upsertFolder, upsertNote, type DeskNote } from "./store";
+import { syncPlaud, type SyncResult } from "./sync";
 
 export interface Env {
   OAUTH_KV: KVNamespace;
@@ -19,6 +22,8 @@ export interface Env {
   SYNC_KEY: string;
   /** Optional: pin the public origin (e.g. https://notes.example.com); other hostnames are refused. */
   PUBLIC_ORIGIN?: string;
+  /** Tests only: send Plaud API calls to a fake Plaud server. Never set in production. */
+  PLAUD_API_OVERRIDE?: string;
   OAUTH_PROVIDER: OAuthHelpers;
 }
 
@@ -110,6 +115,77 @@ async function authorize(request: Request, env: Env): Promise<Response> {
   }
 }
 
+// ---------------------------------------------------------------- /setup (connect Plaud without any app)
+
+async function setupView(env: Env, origin: string, extra: Partial<SetupView> = {}): Promise<SetupView> {
+  const creds = await getSetting<PlaudCreds>(env.DB, "plaud");
+  const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first<{ n: number }>();
+  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+  return {
+    origin, nonce, notes: count?.n ?? 0,
+    plaud: { connected: !!creds?.userToken, apiBase: creds?.apiBase, expires: creds?.userToken ? tokenExpiry(creds.userToken) : null },
+    sync: await getSetting<SyncResult>(env.DB, "plaudSync"),
+    ...extra,
+  };
+}
+
+async function setup(request: Request, env: Env): Promise<Response> {
+  const origin = new URL(request.url).origin;
+  if (!env.OWNER_PASSWORD || env.OWNER_PASSWORD.length < 8) {
+    return messagePage("Set a connector password first", "Run `npx wrangler secret put OWNER_PASSWORD` (8+ characters), then reload this page.", 503);
+  }
+  if (request.method === "GET") return setupPage(await setupView(env, origin));
+  if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+
+  const form = await request.formData();
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const say = async (text: string, ok: boolean, extra: Partial<SetupView> = {}) =>
+    setupPage(await setupView(env, origin, { message: { text, ok }, ...extra }));
+  if (await tooManyAttempts(env, ip)) return say("Too many wrong passwords. Wait 15 minutes.", false);
+  if (!(await secretEquals(String(form.get("password") ?? ""), env.OWNER_PASSWORD))) {
+    await recordFailure(env, ip);
+    return say("Wrong connector password.", false);
+  }
+
+  const action = String(form.get("action") ?? "");
+  const override = env.PLAUD_API_OVERRIDE;
+  try {
+    if (action === "token") {
+      const { creds, recordings } = await connectToken(String(form.get("token") ?? ""), String(form.get("region") ?? "") || undefined, override);
+      await setSetting(env.DB, "plaud", creds);
+      const r = await syncPlaud(env, 10);
+      return say(`Connected to Plaud (${recordings ? "recordings found" : "no recordings yet"}). Imported ${r.added} recording${r.added === 1 ? "" : "s"}${r.pending ? `; ${r.pending} more load over the next runs` : ""}.`, !r.error);
+    }
+    if (action === "send_code") {
+      const email = String(form.get("email") ?? "").trim();
+      if (!email.includes("@")) return say("Enter the email address of your Plaud account.", false);
+      const { otpToken, apiBase } = await sendCode(email, override);
+      return say("Plaud emailed you a code.", true, { otp: { otpToken, apiBase, email } });
+    }
+    if (action === "verify_code") {
+      const token = await verifyCode(String(form.get("code") ?? "").trim(), String(form.get("otp_token") ?? ""), String(form.get("api_base") ?? ""), override);
+      const { creds } = await connectToken(token, undefined, override);
+      await setSetting(env.DB, "plaud", { ...creds, apiBase: String(form.get("api_base") ?? creds.apiBase) });
+      const r = await syncPlaud(env, 10);
+      return say(`Connected. Imported ${r.added} recording${r.added === 1 ? "" : "s"}. (If your Plaud account uses Apple or Google sign-in and nothing appears, use the bookmarklet instead.)`, !r.error);
+    }
+    if (action === "sync") {
+      const r = await syncPlaud(env, 10);
+      return say(r.error ? r.error : `Synced: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} still loading` : ""}.`, !r.error);
+    }
+    if (action === "disconnect") {
+      await env.DB.prepare("DELETE FROM settings WHERE key IN ('plaud', 'plaudSync')").run();
+      return say("Plaud disconnected. Notes already imported stay until you delete them.", true);
+    }
+    return say("Unknown action.", false);
+  } catch (e) {
+    const msg = e instanceof PlaudBlocked
+      ? "Plaud refused the request from Cloudflare's servers (bot protection), so this connector can't read Plaud directly."
+      : (e as Error).message;
+    return say(msg, false);
+  }
+}
+
 // ---------------------------------------------------------------- phone sync API
 
 async function syncApi(request: Request, env: Env, path: string): Promise<Response> {
@@ -164,6 +240,7 @@ const defaultHandler: ExportedHandler<Env> = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/authorize") return authorize(request, env);
+    if (url.pathname === "/setup") return setup(request, env);
     if (url.pathname.startsWith("/api/v1/")) return syncApi(request, env, url.pathname.slice("/api/v1/".length));
     if (url.pathname === "/health") return json({ ok: true, version: SERVER_VERSION });
     if (url.pathname === "/" && request.method === "GET") {
@@ -214,5 +291,10 @@ export default {
       return new Response("Not found", { status: 404 });
     }
     return providerFor(origin).fetch(request, env, ctx);
+  },
+
+  /** Cron (every 30 minutes): pull new Plaud recordings, transcripts and summaries. */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(syncPlaud(env, 10));
   },
 } satisfies ExportedHandler<Env>;

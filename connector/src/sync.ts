@@ -1,0 +1,90 @@
+/** Pulls Plaud recordings (with Plaud's transcripts and AI summaries) into D1 so Claude's searches are instant. */
+import { noteIdForPlaud } from "./ids";
+import { Plaud, PlaudBlocked, type PlaudCreds } from "./plaud";
+import { getNote, getSetting, setSetting, upsertNote, type DeskNote } from "./store";
+
+export interface SyncEnv { DB: D1Database; PLAUD_API_OVERRIDE?: string }
+
+export interface SyncResult {
+  at: number;
+  listed: number;
+  added: number;
+  updated: number;
+  /** Recordings still waiting for their transcript/summary (fetched on later runs). */
+  pending: number;
+  blocked?: boolean;
+  error?: string;
+}
+
+interface StoredDoc extends DeskNote { plaudVersion?: number; plaudContentFetched?: boolean }
+
+/**
+ * @param contentBudget how many recordings' transcript/summary to fetch this run. Each costs ~2–4
+ *   outgoing requests; the free Workers plan allows 50 per run, so the default stays well inside it.
+ */
+export async function syncPlaud(env: SyncEnv, contentBudget = 10, listLimit = 100): Promise<SyncResult> {
+  const result: SyncResult = { at: Date.now() / 1000, listed: 0, added: 0, updated: 0, pending: 0 };
+  const creds = await getSetting<PlaudCreds>(env.DB, "plaud");
+  if (!creds?.userToken) {
+    result.error = "Plaud isn't connected yet — open the connector's /setup page.";
+    return result;
+  }
+  try {
+    const plaud = new Plaud(creds, env.PLAUD_API_OVERRIDE);
+    const recs = await plaud.recent(listLimit);
+    result.listed = recs.length;
+    let budget = contentBudget;
+
+    for (const rec of recs) {
+      const id = noteIdForPlaud(rec.id);
+      const row = await getNote(env.DB, id);
+      const existing: StoredDoc | null = row ? JSON.parse(row.doc) : null;
+      const changed = !existing || (existing.plaudVersion ?? 0) < rec.versionMs;
+      const needsContent = !existing?.plaudContentFetched || changed;
+      if (!changed && !needsContent) continue;
+
+      const doc: StoredDoc = existing ?? {
+        id, title: rec.title, createdAt: rec.startMs / 1000, updatedAt: Date.now() / 1000,
+        duration: rec.durationMs / 1000, source: "plaud", plaudId: rec.id, attachments: [],
+      };
+      // Plaud's name wins unless someone renamed the note by hand (titleLocked comes from the phone mirror).
+      if (!doc.titleLocked && rec.title) doc.title = rec.title;
+      doc.duration = rec.durationMs / 1000 || doc.duration;
+      doc.createdAt = rec.startMs / 1000 || doc.createdAt;
+      doc.plaudId = rec.id;
+      doc.updatedAt = Date.now() / 1000;
+
+      const nothingToFetch = rec.hasTranscript === false && rec.hasSummary === false;
+      if (needsContent && !nothingToFetch) {
+        if (budget > 0) {
+          budget--;
+          const { segments, summary } = await plaud.content(rec.id);
+          if (segments.length && (!doc.transcript?.segments?.length || doc.transcriptSource === "plaud")) {
+            doc.transcript = { segments };
+            doc.transcriptSource = "plaud";
+          }
+          // Keep a richer summary the phone already produced (different style/model).
+          if (summary && (!doc.summary || doc.summarySource === "plaud")) {
+            doc.summary = summary;
+            doc.summarySource = "plaud";
+          }
+          doc.plaudContentFetched = true;
+        } else {
+          doc.plaudContentFetched = false;
+          result.pending++;
+        }
+      } else if (nothingToFetch) {
+        // Up to date for this version; Plaud bumps version_ms when it adds a transcript/summary.
+        doc.plaudContentFetched = true;
+      }
+      doc.plaudVersion = doc.plaudContentFetched ? rec.versionMs : existing?.plaudVersion ?? 0;
+      await upsertNote(env.DB, doc);
+      existing ? result.updated++ : result.added++;
+    }
+  } catch (e) {
+    result.blocked = e instanceof PlaudBlocked;
+    result.error = (e as Error).message;
+  }
+  await setSetting(env.DB, "plaudSync", result);
+  return result;
+}

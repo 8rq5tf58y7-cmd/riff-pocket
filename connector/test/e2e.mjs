@@ -4,10 +4,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { noteIdForPlaud } from "../src/ids.ts";
+import { startFakePlaud, USER_TOKEN, WORKSPACE_TOKEN_PASTE } from "./fake-plaud.mjs";
 
 const BASE = process.env.BASE ?? "https://localhost:8788";
 const PASSWORD = process.env.OWNER_PASSWORD;
 const SYNC_KEY = process.env.SYNC_KEY;
+const FAKE_PLAUD_PORT = process.env.FAKE_PLAUD_PORT; // set when the Worker runs with PLAUD_API_OVERRIDE
 const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 let passed = 0;
 const step = (name) => { passed++; console.log(`  ✓ ${name}`); };
@@ -132,9 +134,9 @@ const note = await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorizati
 assert.equal(note.status, 202);
 const { tools } = await rpc("tools/list", {});
 assert.deepEqual(tools.map((t) => t.name).sort(),
-  ["get_note", "list_folders", "list_recent_notes", "plaud_get_recording", "plaud_recent_recordings", "search_notes"]);
+  ["get_note", "list_folders", "list_recent_notes", "plaud_get_recording", "plaud_recent_recordings", "search_notes", "sync_plaud"]);
 assert.ok(tools.every((t) => t.annotations?.readOnlyHint === true));
-step("initialize, notifications (202), tools/list — 6 read-only tools");
+step("initialize, notifications (202), tools/list — 7 read-only tools");
 
 const text = (r) => r.content.map((c) => c.text).join("\n");
 const found = await rpc("tools/call", { name: "search_notes", arguments: { query: "Globex price" } });
@@ -177,5 +179,72 @@ step("invalid token refused; refresh token rotates and the new token works");
 const landing = await (await fetch(`${BASE}/`)).text();
 assert.match(landing, /\/mcp<\/code>/);
 step("landing page shows the connector URL");
+
+// ---------------------------------------------------------------- Plaud straight into the connector (no app)
+if (FAKE_PLAUD_PORT) {
+  const fake = await startFakePlaud(Number(FAKE_PLAUD_PORT));
+  try {
+    const setup = (fields) => fetch(`${BASE}/setup`, { method: "POST", body: new URLSearchParams(fields) }).then((r) => r.text());
+    const page = await (await fetch(`${BASE}/setup`)).text();
+    assert.match(page, /Send Plaud to Claude/);           // bookmarklet
+    assert.match(page, /pld_tokenstr/);
+    assert.match(await setup({ password: "nope", action: "sync" }), /Wrong connector password/);
+    assert.match(await setup({ password: PASSWORD, action: "token", token: WORKSPACE_TOKEN_PASTE }), /short-lived workspace token/);
+    step("setup page: bookmarklet, password required, workspace tokens refused");
+
+    const connected = await setup({ password: PASSWORD, action: "token", token: `"${USER_TOKEN}"` });
+    assert.match(connected, /Connected to Plaud/, connected.slice(0, 400));
+    assert.match(connected, /Imported 2 recordings/);
+    const zebraId = noteIdForPlaud("rec1");
+    const zebra = text(await rpc("tools/call", { name: "get_note", arguments: { id: zebraId } }));
+    assert.match(zebra, /# Zebra Launch Review/);
+    assert.match(zebra, /Zebra launch reviewed/);           // Plaud summary (inline content)
+    assert.match(zebra, /Dana: confirm venue/);             // action items appended
+    assert.match(zebra, /\[00:01:01\] Speaker 2: The launch date moves to March 3/); // gzip transcript, speaker number
+    const memo = text(await rpc("tools/call", { name: "search_notes", arguments: { query: "untranscribed memo" } }));
+    assert.match(memo, /Untranscribed Memo/);
+    assert.ok(!fake.state.calls.includes("GET file/detail/rec2"), "no content fetch when Plaud has none");
+    const found = text(await rpc("tools/call", { name: "search_notes", arguments: { query: "March launch date" } }));
+    assert.match(found, /Zebra Launch Review/);
+    step("token connect → sync imports recordings with Plaud's transcript (gzip) and summary");
+
+    const before = fake.state.calls.length;
+    const again = text(await rpc("tools/call", { name: "sync_plaud", arguments: {} }));
+    assert.match(again, /0 new, 0 updated/);
+    assert.ok(!fake.state.calls.slice(before).some((c) => c.includes("file/detail")), "unchanged recordings aren't refetched");
+    step("re-sync skips unchanged recordings");
+
+    await fetch(`http://127.0.0.1:${FAKE_PLAUD_PORT}/__v4`);
+    const v4 = text(await rpc("tools/call", { name: "sync_plaud", arguments: {} }));
+    assert.match(v4, /1 new/);
+    const board = text(await rpc("tools/call", { name: "get_note", arguments: { id: noteIdForPlaud("f_new9") } }));
+    assert.match(board, /Board Prep Call/);
+    assert.match(board, /Launch moved to March 3/);          // summary from a gzip markdown link
+    assert.match(board, /Welcome to the zebra launch review/); // transcript via content/url
+    step("Plaud 4.0 account: detects the migration and syncs through /file-app/v4");
+
+    const listing = text(await rpc("tools/call", { name: "plaud_recent_recordings", arguments: {} }));
+    assert.match(listing, /Board Prep Call/);
+    assert.match(listing, /saved as note|mirrored as note/);
+    const cron = await fetch(`${BASE}/cdn-cgi/handler/scheduled?cron=*/30+*+*+*+*`);
+    assert.ok(cron.status < 500, `scheduled handler ran (${cron.status})`);
+    step("live Plaud listing and the 30-minute cron handler");
+
+    const code1 = await setup({ password: PASSWORD, action: "send_code", email: "me@example.com" });
+    assert.match(code1, /emailed you a code/);
+    const otp = code1.match(/name="otp_token" value="([^"]+)"/)[1];
+    const viaEmail = await setup({ password: PASSWORD, action: "verify_code", code: "123456", otp_token: otp, api_base: "https://api.plaud.ai" });
+    assert.match(viaEmail, /Connected\./, viaEmail.slice(0, 400));
+    step("email code sign-in");
+
+    assert.match(await setup({ password: PASSWORD, action: "disconnect" }), /Plaud disconnected/);
+    const off = await rpc("tools/call", { name: "plaud_recent_recordings", arguments: {} });
+    assert.equal(off.isError, true);
+    assert.match(text(off), /setup page/);
+    step("disconnect");
+  } finally {
+    fake.close();
+  }
+}
 
 console.log(`\n${passed} checks passed.`);

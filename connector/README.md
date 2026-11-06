@@ -1,103 +1,98 @@
-# Riff Pocket connector: your notes in Claude
+# Plaud in Claude: the Riff Pocket connector
 
-A small server you deploy once to your own **free Cloudflare account**. It lets **Claude on claude.ai, the Claude desktop app and the Claude iPhone app** search and read your recorded notes. Turn on Claude's **Notion connector** next to it, and Claude can file those notes into Notion.
+A small server you deploy once to your own **free Cloudflare account**. It connects your **Plaud account** to **Claude on claude.ai, the Claude desktop app and the Claude iPhone app**. Claude can then search, read and summarize your recordings. Turn on Claude's **Notion connector** next to it, and Claude can file them into Notion. No other app is needed.
 
 ```
-Note Pro → Plaud app → Plaud cloud → Riff Pocket (iPhone) ── mirror ──▶ this connector ◀── Claude (web, desktop, iPhone)
-                                                                                            └─▶ Notion connector
+Plaud Note Pro → Plaud app → Plaud cloud ──(every 30 min)──▶ this connector ◀── Claude (web · desktop · iPhone)
+                                                                                 └─▶ Notion connector
 ```
-
-- **What it holds:** the iPhone app sends titles, AI summaries, transcripts, folders and the text of attached files. Audio stays on your phone.
-- **Direct Plaud access (optional):** the connector can also read Plaud directly, for recordings not yet on your phone. Plaud protects its API with bot detection that may block Cloudflare's servers. If that happens, Claude says so and uses the mirrored notes instead.
 
 ## What Claude can do with it
 
 | Tool | What it does |
 |---|---|
-| `search_notes` | Keyword search across titles, summaries, transcripts and attachments, filtered by folder and date range |
+| `search_notes` | Keyword search across titles, Plaud's AI summaries and transcripts, filtered by folder and date range |
 | `list_recent_notes` | "What did I record this week?" |
-| `get_note` | Full note: summary, attachments' text, timestamped transcript |
-| `list_folders` | Your folders and how many notes each holds |
-| `plaud_recent_recordings`, `plaud_get_recording` | Straight from Plaud (optional, see above) |
+| `get_note` | One recording in full: summary and timestamped transcript with speakers |
+| `sync_plaud` | Check Plaud for new recordings right now |
+| `plaud_recent_recordings`, `plaud_get_recording` | Live from Plaud |
+| `list_folders` | Folders (only when you also use the Riff Pocket app's mirror) |
 
-It also includes two ready-made prompts:
+It also includes two ready-made prompts in Claude's **+** menu:
 - **Save notes to Notion:** builds a "Recorded Notes" database with a Note ID on each page, so re-running never duplicates.
 - **Weekly digest.**
 
-Every tool is read-only, so Claude can't change or delete your notes.
+Every tool is read-only, so Claude can't change or delete anything in Plaud.
 
-## Deploy, once (about 10 minutes)
+## 1. Deploy (about 10 minutes, once)
 
-You need a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and [Node.js](https://nodejs.org) 20+. Run these from this `connector/` folder.
+You need a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and [Node.js](https://nodejs.org) 20+. Run these from this `connector/` folder:
 
-1. Install the tools:
+```bash
+npm install
+npx wrangler login                              # opens your browser to authorize
+npx wrangler kv namespace create OAUTH_KV       # paste the printed id into wrangler.jsonc
+npx wrangler d1 create riff-pocket              # paste the printed database_id into wrangler.jsonc
+npx wrangler d1 migrations apply DB --remote
+npx wrangler secret put OWNER_PASSWORD          # a password only you know (12+ characters)
+npx wrangler deploy
+```
 
-   ```bash
-   npm install
-   npx wrangler login
-   ```
+`deploy` prints your address, like `https://riff-pocket-connector.<you>.workers.dev`.
 
-2. Create the storage. Paste each printed `id` into `wrangler.jsonc`:
+## 2. Connect your Plaud account
 
-   ```bash
-   npx wrangler kv namespace create OAUTH_KV
-   npx wrangler d1 create riff-pocket
-   npx wrangler d1 migrations apply DB --remote
-   ```
+Open **`https://riff-pocket-connector.<you>.workers.dev/setup`** in a browser on your computer.
 
-3. Set two secrets. Never put them in a file.
-   - **`OWNER_PASSWORD`:** the password you type when Claude connects. Use 12+ characters.
-   - **`SYNC_KEY`:** the key your iPhone uses to send notes. Generate a long random one:
+- **If you signed up for Plaud with Apple or Google:**
+  1. Drag the **Send Plaud to Claude** button to your bookmarks bar.
+  2. Sign in at [web.plaud.ai](https://web.plaud.ai) as usual, then click the bookmark. It brings your Plaud sign-in back to the setup page.
+  3. Enter your connector password and click **Connect Plaud**.
+- **If you signed up with email:** enter your email, click **Email me a code**, then enter the code.
 
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-   npx wrangler secret put SYNC_KEY
-   npx wrangler secret put OWNER_PASSWORD
-   ```
+The connector imports your recent recordings, including Plaud's transcripts and AI summaries, then checks for new ones every 30 minutes. The setup page shows the sync status.
 
-4. Deploy:
-
-   ```bash
-   npx wrangler deploy
-   ```
-
-   It prints your address, like `https://riff-pocket-connector.<you>.workers.dev`. Open it in a browser to see the setup page.
-
-## Connect your iPhone
-
-In Riff Pocket, go to **Settings → Claude connector**:
-1. Enter the address from step 4 and your `SYNC_KEY`, then tap **Connect**. Your notes upload, and stay updated after every sync, in the background, and whenever a note gets a new summary or title.
-2. Optional: tap **Share Plaud sign-in with the connector** to let Claude reach Plaud directly.
-
-## Add it to Claude
+## 3. Add it to Claude
 
 1. On [claude.ai](https://claude.ai), open **Customize → Connectors → Add custom connector**.
-2. Paste the URL with `/mcp` on the end, for example `https://riff-pocket-connector.<you>.workers.dev/mcp`. Riff Pocket's settings has a **Copy connector URL** button.
-3. Click **Connect**. A page asks for your connector password. Enter it and tap **Allow**.
+2. Paste `https://riff-pocket-connector.<you>.workers.dev/mcp`.
+3. Click **Connect**, enter your connector password, and click **Allow**.
 4. It now also appears in the **Claude iPhone app** under the same account.
 
 Try asking:
 - "What did I decide about pricing last week?"
-- "Save today's recordings to Notion." (turn on the Notion connector too, or use the *Save notes to Notion* prompt from the + menu)
-- "Make a weekly digest of my Work folder."
+- "Summarize today's meetings and list my action items."
+- "Save this week's recordings to Notion." (turn on the Notion connector too, or use the *Save notes to Notion* prompt)
+
+## If Plaud blocks Cloudflare
+
+Plaud protects its API with bot detection, and some server addresses are blocked; this is why Riffado offers residential proxies. If that happens to your connector, the setup page and Claude both say so plainly.
+
+The fallback is to let the **Riff Pocket iPhone app** mirror your notes into the connector from your phone's own connection:
+1. Run `npx wrangler secret put SYNC_KEY` (a long random value).
+2. In the app, open Settings → Claude connector and enter the URL and that key.
+
+Everything else stays the same.
 
 ## Security
 
-- **Connecting Claude** uses OAuth 2.1 with PKCE, via [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). Tokens are stored only as hashes. Each new connection needs your `OWNER_PASSWORD`. Wrong passwords are rate-limited: 8 tries per 15 minutes per IP.
-- **The phone's sync API** needs `SYNC_KEY`. To revoke it, rotate the key with `npx wrangler secret put SYNC_KEY` and update the app.
-- **Everything lives in your Cloudflare account:** the notes in D1, OAuth grants in KV, and the optional Plaud sign-in in D1. Nothing passes through the authors of this project.
+- **Connecting Claude** uses OAuth 2.1 with PKCE, via [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). Tokens are stored only as hashes.
+- **Your password protects every connection.** Each new connection and every action on `/setup` needs your `OWNER_PASSWORD`. Wrong passwords are rate-limited to 8 tries per 15 minutes per IP.
+- **The Plaud sign-in** is stored in your Cloudflare D1 database. **Disconnect Plaud** on `/setup` deletes it. Plaud sign-ins last about 300 days; reconnect when the setup page says so.
+- **Your account only:** everything lives in your own Cloudflare account. Nothing passes through the authors of this project.
 - **Custom domain:** to keep the connector on one domain, set `PUBLIC_ORIGIN` (for example `https://notes.example.com`) as a variable. Requests for any other hostname are then refused.
 
 ## Develop and test
 
 ```bash
 npm run db:local
-npx wrangler dev --local-protocol https --port 8788
-# in another terminal: OWNER_PASSWORD=… SYNC_KEY=… (from .dev.vars)
-NODE_TLS_REJECT_UNAUTHORIZED=0 BASE=https://127.0.0.1:8788 node test/e2e.mjs
+# .dev.vars: OWNER_PASSWORD=…  SYNC_KEY=…  PLAUD_API_OVERRIDE=http://127.0.0.1:8790   (the last one is for tests only)
+npx wrangler dev --local-protocol https --port 8788 --test-scheduled
+NODE_TLS_REJECT_UNAUTHORIZED=0 BASE=https://127.0.0.1:8788 FAKE_PLAUD_PORT=8790 \
+  OWNER_PASSWORD=… SYNC_KEY=… node test/e2e.mjs
 ```
 
-The end-to-end test plays both the iPhone app and Claude:
-1. The iPhone side syncs notes.
-2. Claude's side runs OAuth discovery, dynamic registration, the password consent screen and a PKCE token exchange.
-3. It then calls every tool and prompt, and checks that the refresh token rotates.
+The end-to-end test runs 20 checks. It plays Claude, the setup page and a fake Plaud server that has both the classic and the Plaud 4.0 API:
+1. **Claude connecting:** OAuth discovery, dynamic registration, the password consent screen and a PKCE token exchange.
+2. **Setup:** connecting Plaud with a token or an email code, then syncing gzip transcripts and summaries.
+3. **Using it:** every tool and prompt, the cron handler, and refresh-token rotation.

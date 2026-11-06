@@ -116,9 +116,13 @@ No special entitlements are needed, so a free Apple ID works.
 
 Use the iPhone console (e.g. via 3uTools or idevicesyslog), error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
 
-## Your notes in Claude (claude.ai and the Claude iPhone app)
+## ⭐ Plaud in Claude (claude.ai and the Claude iPhone app)
 
-The **[Riff Pocket connector](connector/README.md)** is a small server you deploy once to your free Cloudflare account. Add it to Claude as a custom connector, and Claude can search and read your notes on the web, desktop and iPhone. Next to Claude's Notion connector, it can also file your notes into Notion. Setup takes about 10 minutes and is in the connector README.
+The **[connector](connector/README.md)** is a small server you deploy once to your free Cloudflare account. It needs no other app:
+1. Connect your Plaud account on its setup page. Apple and Google sign-ups use a one-click bookmarklet.
+2. Add it to Claude as a custom connector.
+
+Claude can then search, read and summarize your recordings on the web, desktop and iPhone, using Plaud's transcripts and AI summaries. It syncs every 30 minutes. Next to Claude's Notion connector, it can also file your notes into Notion. Setup takes about 10 minutes; see [connector/README.md](connector/README.md).
 
 ## Desktop companion
 

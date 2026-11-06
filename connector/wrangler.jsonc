@@ -9,10 +9,13 @@
   "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "observability": { "enabled": true },
+  // Pull new Plaud recordings every 30 minutes.
+  "triggers": { "crons": ["*/30 * * * *"] },
   // `npx wrangler kv namespace create OAUTH_KV` and `npx wrangler d1 create riff-pocket` print these ids.
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
   "d1_databases": [
     { "binding": "DB", "database_name": "riff-pocket", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations" }
   ]
-  // Secrets (never in this file): OWNER_PASSWORD, SYNC_KEY — `npx wrangler secret put <NAME>`.
+  // Secrets (never in this file): OWNER_PASSWORD, and SYNC_KEY if you use the iPhone app's mirror —
+  // `npx wrangler secret put <NAME>`.
 }

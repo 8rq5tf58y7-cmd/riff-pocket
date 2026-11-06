@@ -4,20 +4,21 @@
  */
 import { noteIdForPlaud } from "./ids";
 import { Plaud, PlaudBlocked, PlaudError, type PlaudCreds } from "./plaud";
-import { clock, getNote, getSetting, listFolders, recentNotes, searchNotes, type DeskNote, type NoteRow } from "./store";
+import { clock, getNote, getSetting, listFolders, recentNotes, searchNotes, upsertNote, type DeskNote, type NoteRow } from "./store";
+import { syncPlaud, type SyncResult } from "./sync";
 
 export const SERVER_VERSION = "0.1.0";
 const PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_RESULT = 140_000; // Claude's hosted limit is ~150k characters per tool result
 
-const INSTRUCTIONS = `This connector gives you the user's recorded notes: Plaud Note Pro recordings (and phone recordings) mirrored from the Riff Pocket app, with AI titles, summaries, transcripts, folders and the text of attached files.
+const INSTRUCTIONS = `This connector gives you the user's Plaud recordings as notes: titles, Plaud's AI summaries, timestamped transcripts (with speakers), and — when the Riff Pocket app is used — folders, its own summaries and attached files' text. It syncs from Plaud every 30 minutes.
 - Find notes with search_notes (keywords, folder, date range) or list_recent_notes, then read one with get_note.
+- If the user mentions a recording that isn't there yet, call sync_plaud, then search again.
 - Cite note titles and [hh:mm:ss] timestamps when you answer.
-- plaud_recent_recordings / plaud_get_recording read Plaud's cloud directly, for recordings not yet mirrored; they may be unavailable if Plaud blocks cloud servers.
 - To save notes to Notion, use the Notion connector (if enabled) — see the save_to_notion prompt for the page layout.`;
 
 type Json = Record<string, any>;
-type Env = { DB: D1Database };
+type Env = { DB: D1Database; PLAUD_API_OVERRIDE?: string };
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
 
@@ -76,6 +77,13 @@ const TOOLS = [
     description: "List the user's note folders with how many notes each holds.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { ...readOnly, openWorldHint: false },
+  },
+  {
+    name: "sync_plaud",
+    title: "Check Plaud for new recordings",
+    description: "Pull new and changed recordings (with Plaud's transcripts and summaries) from the user's Plaud account now, instead of waiting for the automatic 30-minute sync. Use when a recording the user mentions isn't found.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
     name: "plaud_recent_recordings",
@@ -179,9 +187,9 @@ function preview(row: NoteRow): string {
 async function plaudClient(env: Env): Promise<Plaud> {
   const creds = await getSetting<PlaudCreds>(env.DB, "plaud");
   if (!creds?.userToken) {
-    throw new ToolError("Plaud isn't connected to this connector yet. In Riff Pocket: Settings → Claude connector → Share Plaud sign-in. Mirrored notes (search_notes) work without it.");
+    throw new ToolError("Plaud isn't connected to this connector yet. Open the connector's /setup page in a browser to connect it.");
   }
-  return new Plaud(creds);
+  return new Plaud(creds, env.PLAUD_API_OVERRIDE);
 }
 
 async function callTool(env: Env, name: string, a: Json): Promise<string> {
@@ -196,13 +204,26 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       const limit = Math.min(Math.max(Number(a.limit) || 15, 1), 50);
       const since = a.days ? Date.now() / 1000 - Number(a.days) * 86_400 : undefined;
       const rows = await recentNotes(env.DB, { folder: a.folder, since }, limit);
-      if (!rows.length) return "No notes yet. Notes appear after Riff Pocket on the iPhone syncs to this connector.";
+      if (!rows.length) return "No notes yet. Connect Plaud on the connector's /setup page, or call sync_plaud.";
       return rows.map((r) => noteLine(r, preview(r))).join("\n");
     }
     case "get_note": {
-      const row = await getNote(env.DB, String(a.id ?? ""));
+      let row = await getNote(env.DB, String(a.id ?? ""));
       if (!row) throw new ToolError(`No note with id ${a.id}. Use search_notes to find ids.`);
-      const doc = JSON.parse(row.doc) as DeskNote;
+      let doc = JSON.parse(row.doc) as DeskNote & { plaudContentFetched?: boolean };
+      if (row.plaud_id && !doc.plaudContentFetched && (!row.transcript_text || !row.summary)) {
+        try {
+          const { segments, summary } = await (await plaudClient(env)).content(row.plaud_id);
+          if (segments.length && !doc.transcript?.segments?.length) { doc.transcript = { segments }; doc.transcriptSource = "plaud"; }
+          if (summary && !doc.summary) { doc.summary = summary; doc.summarySource = "plaud"; }
+          doc.plaudContentFetched = true;
+          await upsertNote(env.DB, doc);
+          row = (await getNote(env.DB, row.id))!;
+          doc = JSON.parse(row.doc);
+        } catch {
+          // Show what we have; the next sync retries.
+        }
+      }
       const parts = [
         `# ${row.title}`,
         `${fmtDate(row.created_at)} · ${fmtDur(row.duration)}${row.folder_name ? ` · 📁 ${row.folder_name}` : ""} · source: ${row.plaud_id ? "Plaud" : row.source}${row.plaud_id ? ` (Plaud id ${row.plaud_id})` : ""}`,
@@ -227,6 +248,11 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       const folders = await listFolders(env.DB);
       return folders.length ? folders.map((f) => `- ${f.name} (${f.count})`).join("\n") : "No folders yet.";
     }
+    case "sync_plaud": {
+      const r: SyncResult = await syncPlaud(env, 10);
+      if (r.error) throw r.blocked ? new PlaudBlocked(r.error) : new ToolError(r.error);
+      return `Checked ${r.listed} recent recordings: ${r.added} new, ${r.updated} updated${r.pending ? `, ${r.pending} more still loading (call sync_plaud again)` : ""}.`;
+    }
     case "plaud_recent_recordings": {
       const plaud = await plaudClient(env);
       const recs = await plaud.recent(Math.min(Math.max(Number(a.limit) || 20, 1), 50));
@@ -240,9 +266,10 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       const id = String(a.plaud_id ?? "");
       const mirrored = await getNote(env.DB, noteIdForPlaud(id));
       const plaud = await plaudClient(env);
-      const { transcript, summary } = await plaud.content(id);
+      const { segments, summary } = await plaud.content(id);
+      const transcript = segments.map((s) => `[${clock(s.start)}] ${s.speaker ? s.speaker + ": " : ""}${s.text}`).join("\n");
       return [
-        mirrored ? `(Also mirrored as note \`${mirrored.id}\` — get_note includes Riff Pocket's own summary and attachments.)\n` : "",
+        mirrored ? `(Also saved as note \`${mirrored.id}\` — get_note works too.)\n` : "",
         "## Plaud summary", summary || "_Plaud hasn't summarized this recording._",
         "", "## Plaud transcript", transcript ? transcript.slice(0, 110_000) : "_Plaud hasn't transcribed this recording._",
       ].join("\n");
@@ -292,7 +319,7 @@ async function handle(env: Env, msg: Json): Promise<Json | null> {
         return ok({ content: [{ type: "text", text }] });
       } catch (e) {
         const message = e instanceof PlaudBlocked
-          ? `${e.message} Use search_notes / get_note instead — Riff Pocket mirrors your Plaud notes here from your phone.`
+          ? `${e.message} Notes already saved in the connector still work via search_notes / get_note.`
           : e instanceof ToolError || e instanceof PlaudError
             ? e.message
             : `Something went wrong: ${(e as Error).message}`;
