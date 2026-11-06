@@ -44,6 +44,7 @@ public protocol Transcriber: Sendable {
 
 public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case appleOnDevice      // Foundation Models (chat) / SpeechAnalyzer (transcribe)
+    case mlx                // open-weight LLMs running on the iPhone (MLX, Hugging Face downloads)
     case whisperKit         // on-device Whisper on the Neural Engine
     case ollama             // your own machine, OpenAI-compatible endpoint
     case openAICompatible   // OpenAI, Groq, Together, LM Studio, … (API key)
@@ -56,6 +57,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable 
     public var label: String {
         switch self {
         case .appleOnDevice: return "Apple on-device"
+        case .mlx: return "Local model (on iPhone)"
         case .whisperKit: return "WhisperKit (on-device)"
         case .ollama: return "Ollama"
         case .openAICompatible: return "OpenAI-compatible (API key)"
@@ -68,7 +70,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Identifiable 
     public var canTranscribe: Bool {
         switch self {
         case .appleOnDevice, .whisperKit, .openAICompatible, .ollama, .riffado: return true
-        case .anthropic, .openRouter: return false
+        case .anthropic, .openRouter, .mlx: return false
         }
     }
 
@@ -105,6 +107,8 @@ public struct ProviderConfig: Codable, Hashable, Sendable {
         switch kind {
         case .appleOnDevice:
             return .init(kind: kind, model: "system")
+        case .mlx:
+            return .init(kind: kind, model: "mlx-community/Qwen3-1.7B-4bit")
         case .whisperKit:
             return .init(kind: kind, model: "base")
         case .ollama:

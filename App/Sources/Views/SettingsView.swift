@@ -1,14 +1,11 @@
 import SwiftUI
-import AuthenticationServices
 import RiffCore
 
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var account: PlaudAccount
-    @Environment(\.webAuthenticationSession) private var webAuth
+    @ObservedObject private var local = MLXModelStore.shared
     @State private var showConnect = false
-    @State private var keys: [AITask: String] = [:]
-    @State private var openRouterConnected = Keychain.string(AIRouter.openRouterKey) != nil
     @State private var riffadoKey = Keychain.string("riffado.key") ?? ""
     @State private var message: String?
 
@@ -16,25 +13,22 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 plaudSection
-                ForEach(AITask.allCases) { providerSection(for: $0) }
-                openRouterSection
-                Section("Transcription") {
-                    Toggle("Prefer Plaud's own transcript & summary", isOn: $settings.settings.preferPlaudContent)
+                modelsSection
+                Section {
+                    Toggle("Use Plaud's transcript & summary when available", isOn: $settings.settings.preferPlaudContent)
                     TextField("Language (blank = auto, e.g. en)", text: $settings.settings.language)
                         .textInputAutocapitalization(.never)
-                }
+                } header: { SectionLabel("Transcription") }
                 riffadoSection
-                if let message { Section { Text(message).font(.footnote) } }
+                if let message { Section { Text(message).font(.footnote).foregroundStyle(Theme.secondary) } }
                 Section {
-                    Text("Riff Pocket is an independent project, not affiliated with Plaud. Plaud sign-in logic is ported from Riffado (AGPL-3.0).")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("Riff Pocket is an independent project, not affiliated with Plaud. Plaud sign-in and sync logic is ported from Riffado (AGPL-3.0).")
+                        .font(.footnote).foregroundStyle(Theme.secondary)
                 }
             }
+            .themedList()
             .navigationTitle("Settings")
             .sheet(isPresented: $showConnect) { PlaudConnectView() }
-            .onAppear {
-                for t in AITask.allCases { keys[t] = Keychain.string(t.keychainKey) ?? "" }
-            }
             .task { await account.refreshDevices() }
         }
     }
@@ -42,87 +36,66 @@ struct SettingsView: View {
     // MARK: Plaud
 
     private var plaudSection: some View {
-        Section("Plaud account") {
+        Section {
             if let creds = account.credentials {
                 LabeledContent("Server", value: account.region?.label ?? creds.apiBase)
                 if let exp = creds.expiresAt {
-                    LabeledContent("Sign-in valid until", value: exp.formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent("Signed in until", value: exp.formatted(date: .abbreviated, time: .omitted))
                 }
                 ForEach(Array(account.devices.enumerated()), id: \.offset) { _, d in
-                    LabeledContent(d.name ?? d.model ?? "Device", value: d.sn ?? "")
+                    LabeledContent(d.name ?? d.model ?? "Device") {
+                        Text(d.sn ?? "").font(Theme.mono)
+                    }
                 }
-                if let warning = account.expiryWarning { Text(warning).foregroundStyle(.orange) }
+                if let warning = account.expiryWarning { Text(warning).foregroundStyle(Theme.warning) }
                 Button("Reconnect") { showConnect = true }
                 Button("Disconnect", role: .destructive) { account.disconnect() }
             } else {
-                Button("Connect Plaud account") { showConnect = true }
-            }
-        }
-    }
-
-    // MARK: Providers
-
-    private func providerSection(for task: AITask) -> some View {
-        let binding = Binding<ProviderConfig>(
-            get: { settings.settings.config(for: task) },
-            set: { settings.settings.setConfig($0, for: task) }
-        )
-        let kinds = ProviderKind.allCases.filter { task == .transcribe ? $0.canTranscribe : $0.canChat }
-            .filter { $0 != .riffado && !(task == .transcribe && $0 == .appleOnDevice) }
-        return Section(task.label) {
-            Picker("Provider", selection: Binding(
-                get: { binding.wrappedValue.kind },
-                set: { binding.wrappedValue = .preset($0, forTranscription: task == .transcribe) }
-            )) {
-                ForEach(kinds) { Text($0.label).tag($0) }
-            }
-            if binding.wrappedValue.kind.needsBaseURL {
-                TextField("Base URL", text: binding.baseURL)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
-            if binding.wrappedValue.kind != .appleOnDevice {
-                TextField(binding.wrappedValue.kind == .whisperKit ? "Model (tiny, base, small, large-v3-turbo)" : "Model",
-                          text: binding.model)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
-            if binding.wrappedValue.kind.needsAPIKey && binding.wrappedValue.kind != .openRouter {
-                SecureField("API key", text: Binding(
-                    get: { keys[task] ?? "" },
-                    set: { keys[task] = $0; Keychain.setString($0, for: task.keychainKey) }
-                ))
-            }
-            if binding.wrappedValue.kind == .ollama {
-                Text("Run Ollama on your PC or Mac and reach it over Tailscale (e.g. https://my-pc.tailnet.ts.net/v1). Set OLLAMA_HOST=0.0.0.0 on that machine.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var openRouterSection: some View {
-        Section {
-            if openRouterConnected {
-                Label("Signed in to OpenRouter", systemImage: "checkmark.seal")
-                Button("Sign out of OpenRouter", role: .destructive) {
-                    Keychain.delete(AIRouter.openRouterKey)
-                    openRouterConnected = false
+                Button { showConnect = true } label: {
+                    Label("Connect Plaud account", systemImage: "person.crop.circle.badge.plus")
                 }
-            } else {
-                Button("Sign in with OpenRouter") {
-                    Task {
-                        do {
-                            let key = try await OpenRouterSignIn.signIn(using: webAuth)
-                            Keychain.setString(key, for: AIRouter.openRouterKey)
-                            openRouterConnected = true
-                        } catch {
-                            message = errorMessage(error)
-                        }
+            }
+        } header: { SectionLabel("Plaud account") }
+    }
+
+    // MARK: Models
+
+    private var modelsSection: some View {
+        Section {
+            ForEach(AITask.allCases) { task in
+                NavigationLink {
+                    ModelPickerView(config: binding(for: task), task: task)
+                } label: {
+                    LabeledContent {
+                        Text(settings.settings.config(for: task).chipLabel).font(Theme.mono).lineLimit(1)
+                    } label: {
+                        Label(task.label, systemImage: icon(task))
                     }
                 }
             }
-        } header: {
-            Text("Sign in instead of an API key")
-        } footer: {
-            Text("Gives access to hundreds of models billed to your OpenRouter account. Pick \"OpenRouter (sign in)\" as a provider above.")
+            NavigationLink {
+                LocalModelsView()
+            } label: {
+                LabeledContent {
+                    Text("\(local.downloaded.count) on device").font(Theme.mono)
+                } label: {
+                    Label("Local models", systemImage: "cpu")
+                }
+            }
+        } header: { SectionLabel("AI models") } footer: {
+            Text("Defaults for new chats. Every chat also has a model chip under the message box, so you can switch source and model on the fly.")
+        }
+    }
+
+    private func binding(for task: AITask) -> Binding<ProviderConfig> {
+        Binding(get: { settings.settings.config(for: task) }, set: { settings.settings.setConfig($0, for: task) })
+    }
+
+    private func icon(_ task: AITask) -> String {
+        switch task {
+        case .transcribe: return "waveform"
+        case .summarize: return "sparkles"
+        case .chat: return "bubble.left.and.text.bubble.right"
         }
     }
 
@@ -147,17 +120,14 @@ struct SettingsView: View {
                 Task {
                     guard let creds = account.credentials else { message = "Connect Plaud first."; return }
                     do {
-                        let ok = try await RiffadoClient(baseURL: settings.settings.riffadoURL, bearer: riffadoKey)
-                            .connectPlaud(creds)
+                        let ok = try await RiffadoClient(baseURL: settings.settings.riffadoURL, bearer: riffadoKey).connectPlaud(creds)
                         message = ok ? "Riffado is now connected to your Plaud account." : "Riffado didn't confirm the connection."
                     } catch { message = errorMessage(error) }
                 }
             }
             .disabled(settings.settings.riffadoURL.isEmpty || !account.isConnected)
-        } header: {
-            Text("Riffado server (optional)")
-        } footer: {
-            Text("Shares the token you captured here with your self-hosted Riffado, so its web dashboard, scheduled sync and webhooks work on desktop too.")
+        } header: { SectionLabel("Riffado server (optional)") } footer: {
+            Text("Shares the Plaud token captured here with your self-hosted Riffado, so its dashboard, scheduled sync and webhooks work on desktop too.")
         }
     }
 }

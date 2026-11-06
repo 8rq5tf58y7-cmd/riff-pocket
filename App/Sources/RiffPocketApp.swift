@@ -7,24 +7,34 @@ struct RiffPocketApp: App {
     @StateObject private var account = PlaudAccount()
     @StateObject private var sync = SyncService()
 
+    init() {
+        Theme.applyAppearance()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(account)
                 .environmentObject(sync)
+                .tint(Theme.accent)
+                .foregroundStyle(Theme.text)
         }
-        .modelContainer(for: RecordingItem.self)
+        .modelContainer(for: [RecordingItem.self, Folder.self])
     }
 }
 
 struct RootView: View {
     var body: some View {
         TabView {
-            Tab("Recordings", systemImage: "waveform") { RecordingsView() }
-            Tab("Record", systemImage: "mic.circle") { RecordView() }
-            Tab("Settings", systemImage: "gearshape") { SettingsView() }
+            Tab("Notes", systemImage: "waveform") { RecordingsView() }
+            Tab("Chat", systemImage: "bubble.left.and.text.bubble.right") {
+                NavigationStack { LibraryChatView() }
+            }
+            Tab("Record", systemImage: "mic") { RecordView() }
+            Tab("Settings", systemImage: "slider.horizontal.3") { SettingsView() }
         }
+        .background(Theme.background)
     }
 }
 

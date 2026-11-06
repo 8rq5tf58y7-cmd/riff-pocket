@@ -16,9 +16,20 @@ settings:
 packages:
   RiffCore:
     path: Packages/RiffCore
+  # 1.x: no swift-transformers dependency, so it coexists with MLX (which needs swift-transformers >= 1.3).
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit
+    from: "1.1.1"
+  # Local LLMs on the iPhone.
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    minorVersion: "3.32.3"
+  SwiftHuggingFace:
+    url: https://github.com/huggingface/swift-huggingface
     from: "0.9.0"
+  SwiftTransformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: "1.3.0"
 
 targets:
   RiffPocket:
@@ -30,6 +41,16 @@ targets:
     dependencies:
       - package: RiffCore
       - package: WhisperKit
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
+      - package: MLXSwiftLM
+        product: MLXHuggingFace
+      - package: SwiftHuggingFace
+        product: HuggingFace
+      - package: SwiftTransformers
+        product: Tokenizers
     settings:
       base:
         # Change to something unique to you (e.g. com.yourname.riffpocket) before using TestFlight.

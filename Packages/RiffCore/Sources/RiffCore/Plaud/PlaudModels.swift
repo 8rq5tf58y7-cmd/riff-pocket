@@ -82,6 +82,8 @@ public struct PlaudRecording: Codable, Hashable, Sendable, Identifiable {
     public var serial_number: String?
     public var is_trans: Bool?
     public var is_summary: Bool?
+    /// "v4" when listed through Plaud 4.0's `/file-app/v4` API (flags need `hydrate`).
+    public var source: String?
 
     public init(id: String, filename: String? = nil, version_ms: Double? = nil, start_time: Double? = nil,
                 duration: Double? = nil, is_trans: Bool? = nil, is_summary: Bool? = nil) {
@@ -109,6 +111,7 @@ struct PlaudRecordingsResponse: Decodable {
 
 struct PlaudTempURLResponse: Decodable {
     var status: Int?
+    var msg: String?
     var temp_url: String?
     var temp_url_opus: String?
 }
