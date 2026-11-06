@@ -49,6 +49,10 @@ struct AppSettings: Codable, Equatable {
     var deskURL = ""
     var deskEnabled = false
 
+    // Claude connector (sync key lives in the Keychain)
+    var cloudURL = ""
+    var cloudEnabled = false
+
     init() {}
 
     /// Tolerant decoding so settings saved by older builds keep working when fields are added.
@@ -73,6 +77,8 @@ struct AppSettings: Codable, Equatable {
         renameInPlaud = (try? c.decode(Bool.self, forKey: .renameInPlaud)) ?? d.renameInPlaud
         deskURL = (try? c.decode(String.self, forKey: .deskURL)) ?? d.deskURL
         deskEnabled = (try? c.decode(Bool.self, forKey: .deskEnabled)) ?? d.deskEnabled
+        cloudURL = (try? c.decode(String.self, forKey: .cloudURL)) ?? d.cloudURL
+        cloudEnabled = (try? c.decode(Bool.self, forKey: .cloudEnabled)) ?? d.cloudEnabled
         // Transcription via Ollama was never possible (no speech-to-text endpoint).
         if !transcribe.kind.canTranscribe { transcribe = d.transcribe }
     }

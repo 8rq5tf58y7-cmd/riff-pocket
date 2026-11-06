@@ -17,6 +17,7 @@ struct SettingsView: View {
                 summariesSection
                 namingSection
                 deskSection
+                cloudSection
                 backgroundSection
                 Section {
                     Toggle("Use Plaud's transcript & summary when available", isOn: $settings.settings.preferPlaudContent)
@@ -150,6 +151,24 @@ struct SettingsView: View {
             }
         } footer: {
             Text("Riff Desk syncs your notes with your computer and processes new recordings there — even while your phone is locked.")
+        }
+    }
+
+    // MARK: Claude connector
+
+    private var cloudSection: some View {
+        Section {
+            NavigationLink {
+                CloudSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(CloudMirror.shared.isConfigured ? "Connected" : "Not set up").font(Theme.mono)
+                } label: {
+                    Label("Claude connector", systemImage: "sparkles")
+                }
+            }
+        } footer: {
+            Text("Search and read your notes from Claude on claude.ai and the Claude iPhone app — and save them to Notion.")
         }
     }
 

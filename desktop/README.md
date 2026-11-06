@@ -15,6 +15,11 @@ Riff Desk runs on your computer (Windows, macOS or Linux) and syncs with **Riff 
 
 It uses only the Python standard library, so there's nothing to install except Python itself.
 
+## Get it
+
+- **Windows, easiest:** open the latest run under [Actions](https://github.com/8rq5tf58y7-cmd/riff-pocket/actions), download **RiffDesk-windows** and unzip it. Then double-click **`RiffDesk.exe`**: Python is bundled, so there's nothing to install. Windows SmartScreen may warn about an unsigned app; choose *More info → Run anyway*.
+- **From source, on any OS:** follow the steps below. On Windows you can also double-click **`Start Riff Desk.bat`**.
+
 ## Run it
 
 1. Install **Python 3.10 or newer** ([python.org](https://www.python.org/downloads/); on Windows tick *Add python.exe to PATH*).

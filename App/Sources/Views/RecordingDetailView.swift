@@ -293,8 +293,12 @@ struct RecordingDetailView: View {
                     }
                 }
                 if addingFile { ThinkingIndicator(label: "Reading file").listRowBackground(Theme.background) }
-            } footer: {
-                Text("PDFs, text, Markdown, CSV, RTF/HTML and photos (text is read on-device) are included when you Ask about this note and in Library chat. For Word or Pages files, export to PDF first.")
+                if !recording.attachments.isEmpty {
+                    Text("Ask and Library chat read these files. Works best with PDFs, text, Markdown, CSV, RTF and photos; export Word or Pages files to PDF.")
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                        .listRowBackground(Theme.background)
+                        .listRowSeparator(.hidden)
+                }
             }
         }
         .listStyle(.plain)

@@ -87,6 +87,7 @@ enum BackgroundWork {
         }
         // The desktop companion may have transcribed, summarized and named notes while we slept.
         let updatedByDesk = await DeskSync.shared.sync(context: context)
+        await CloudMirror.shared.push(context: context)
         let added = ((try? context.fetchCount(FetchDescriptor<RecordingItem>())) ?? 0) - before
         if updatedByDesk > max(added, 0) {
             await Notifier.post(title: "Your notes are ready",

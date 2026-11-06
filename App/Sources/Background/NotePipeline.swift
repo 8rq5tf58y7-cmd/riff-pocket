@@ -195,6 +195,7 @@ final class Pipeline: ObservableObject {
             task?.progress.completedUnitCount = Int64(done * 3)
         }
 
+        if ready > 0 { await CloudMirror.shared.push(context: context) } // new summaries/titles → Claude
         if UIApplication.shared.applicationState != .active, ready + waiting > 0 {
             let body = waiting > 0
                 ? "\(ready) ready. \(waiting) waiting for you to open the app (on-iPhone model)."

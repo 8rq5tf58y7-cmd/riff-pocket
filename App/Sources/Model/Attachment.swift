@@ -67,8 +67,8 @@ enum AttachmentStorage {
         let att = NoteAttachment(id: id, name: url.lastPathComponent, contentType: type.identifier, size: size,
                                  fileName: dest.lastPathComponent)
         att.extractedText = await TextExtractor.text(from: dest, type: type)
+        context.insert(att)       // insert first, then link (linking first crashes SwiftData)
         att.note = note
-        context.insert(att)
         try context.save()
         return att
     }
@@ -81,8 +81,8 @@ enum AttachmentStorage {
         let att = NoteAttachment(id: id, name: "Photo \(Date.now.formatted(date: .abbreviated, time: .shortened)).jpg",
                                  contentType: UTType.jpeg.identifier, size: data.count, fileName: dest.lastPathComponent)
         att.extractedText = await TextExtractor.text(from: dest, type: .jpeg)
+        context.insert(att)       // insert first, then link (linking first crashes SwiftData)
         att.note = note
-        context.insert(att)
         try context.save()
         return att
     }

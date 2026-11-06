@@ -235,8 +235,8 @@ extension RecordingItem {
         for a in n.attachments where !a.deleted && !known.contains(a.id) {
             let att = NoteAttachment(id: a.id, name: a.name, contentType: a.contentType, size: a.size, fileName: "")
             att.extractedText = a.text
+            modelContext?.insert(att)  // insert first, then link
             att.note = self
-            modelContext?.insert(att)
         }
         for att in attachments where n.attachments.contains(where: { $0.id == att.id && $0.deleted }) {
             if att.hasLocalFile { try? FileManager.default.removeItem(at: att.fileURL) }

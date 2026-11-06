@@ -37,6 +37,8 @@ final class RecordingItem {
     /// Last state agreed with the desktop companion (base for 3-way merges). nil = never synced.
     var deskSnapshotData: Data?
     var deskUpdatedAt: Date?
+    /// Fingerprint of what the Claude connector last received (push only changes).
+    var cloudPushedHash: String?
 
     init(title: String, createdAt: Date = .now, duration: Double, audioFileName: String, source: String,
          id: UUID = UUID()) {

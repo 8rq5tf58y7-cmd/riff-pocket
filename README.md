@@ -116,9 +116,13 @@ No special entitlements are needed, so a free Apple ID works.
 
 Use the iPhone console (e.g. via 3uTools or idevicesyslog), error messages in the app, and the `swift test` suite for logic. For the occasional hard bug, rent a cloud Mac for an hour.
 
+## Your notes in Claude (claude.ai and the Claude iPhone app)
+
+The **[Riff Pocket connector](connector/README.md)** is a small server you deploy once to your free Cloudflare account. Add it to Claude as a custom connector, and Claude can search and read your notes on the web, desktop and iPhone. Next to Claude's Notion connector, it can also file your notes into Notion. Setup takes about 10 minutes and is in the connector README.
+
 ## Desktop companion
 
-**[Riff Desk](desktop/README.md)** runs on your Windows, Mac or Linux computer (`python riffdesk.py`) and syncs with the iPhone.
+**[Riff Desk](desktop/README.md)** runs on your computer and syncs with the iPhone. **Windows:** download **RiffDesk-windows** (a single `RiffDesk.exe`, nothing to install) from the latest run under [Actions](https://github.com/8rq5tf58y7-cmd/riff-pocket/actions). **Mac/Linux, or from source:** `python riffdesk.py` in `desktop/`, or double-click `Start Riff Desk.bat` on Windows.
 - **Processing while your phone sleeps:** it pulls new Plaud recordings and transcribes, summarizes and names them. Your phone downloads just the results.
 - **Desktop app:** a local web app for notes, folders, attachments and chat.
 - **Pairing:** scan its QR code with the iPhone Camera.

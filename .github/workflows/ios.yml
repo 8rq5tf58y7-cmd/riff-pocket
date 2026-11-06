@@ -31,6 +31,61 @@ jobs:
       - run: python -m unittest discover -s tests -v
         working-directory: desktop
 
+  desktop-windows:
+    name: Riff Desk for Windows (.exe)
+    runs-on: windows-latest
+    needs: desktop-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build RiffDesk.exe (Python bundled, nothing to install)
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller==6.16.0
+          pyinstaller --noconfirm --onefile --name RiffDesk --add-data "riffdesk/web;riffdesk/web" riffdesk.py
+      - name: Smoke test — start it and load the web app
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\RiffDesk.exe -ArgumentList "--no-browser","--port","8799","--host","127.0.0.1","--data","$env:RUNNER_TEMP\riffdesk" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try { $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8799/; if ($r.Content -match "Riff Desk") { $ok = $true; break } } catch {}
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw "RiffDesk.exe did not serve the web app" }
+          "RiffDesk.exe started and served the web app."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiffDesk-windows
+          path: desktop/dist/RiffDesk.exe
+          retention-days: 30
+
+  connector-tests:
+    name: Claude connector tests (Worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install, type-check, and run end-to-end against wrangler dev
+        working-directory: connector
+        run: |
+          npm ci
+          npx wrangler types
+          npx tsc --noEmit
+          printf 'OWNER_PASSWORD=%s\nSYNC_KEY=%s\n' "ci-password-$RANDOM$RANDOM" "ci-sync-key-$RANDOM$RANDOM$RANDOM$RANDOM" > .dev.vars
+          npx wrangler d1 migrations apply DB --local
+          npx wrangler dev --local-protocol https --port 8788 --ip 127.0.0.1 > wrangler.log 2>&1 &
+          for i in $(seq 1 60); do curl -skf https://127.0.0.1:8788/health && break; sleep 1; done
+          set -a; . ./.dev.vars; set +a
+          NODE_TLS_REJECT_UNAUTHORIZED=0 BASE=https://127.0.0.1:8788 node test/e2e.mjs || { cat wrangler.log; exit 1; }
+
   ios-build:
     name: Build iOS app
     runs-on: macos-26

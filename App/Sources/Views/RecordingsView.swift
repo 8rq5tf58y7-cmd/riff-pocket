@@ -251,6 +251,7 @@ struct RecordingsView: View {
                 await sync.sync(account: account, context: context, usePlaudContent: settings.settings.preferPlaudContent)
             }
             await DeskSync.shared.sync(context: context)
+            await CloudMirror.shared.push(context: context)
         }
         // A pull-to-refresh is a user action, so new work can run as a continued task.
         let s = settings.settings
@@ -288,8 +289,8 @@ struct RecordingsView: View {
                     audioFileName: dest.lastPathComponent,
                     source: "import"
                 )
+                context.insert(item)  // insert first, then link to the folder
                 if case .folder(let id) = scope { item.folder = folders.first { $0.id == id } }
-                context.insert(item)
             }
             try context.save()
         } catch {

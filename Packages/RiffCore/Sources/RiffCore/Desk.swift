@@ -314,6 +314,31 @@ public struct DeskClient: Sendable {
         try await http.send(try request("api/v1/notes/\(pct(noteId))/attachments/\(pct(attachmentId))", timeout: 300))
     }
 
+    /// Mirror targets (the Claude connector): remove notes that no longer exist on the phone.
+    @discardableResult
+    public func prune(keep ids: [String]) async throws -> Int {
+        var req = try request("api/v1/notes/prune", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["keep": ids])
+        struct Pruned: Decodable { let removed: Int }
+        return try await http.sendJSON(req, as: Pruned.self).removed
+    }
+
+    /// Stable fingerprint of a note's content (ignores timestamps/transport flags), to push only changes.
+    public static func fingerprint(_ note: DeskNote) -> String {
+        var n = note
+        n.updatedAt = Date(timeIntervalSince1970: 0)
+        n.hasAudio = false
+        n.attachments.sort { $0.id < $1.id }
+        let e = encoder()
+        e.outputFormatting = [.sortedKeys]
+        let data = (try? e.encode(n)) ?? Data()
+        // FNV-1a 64 is plenty to detect changes (not a security boundary).
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in data { h ^= UInt64(b); h = h &* 0x100000001b3 }
+        return String(h, radix: 16) + "-\(data.count)"
+    }
+
     /// Lets the desktop sync Plaud itself (so new recordings are processed while the phone sleeps).
     public func connectPlaud(_ credentials: PlaudCredentials) async throws {
         var req = try request("api/v1/plaud/connect", method: "POST")

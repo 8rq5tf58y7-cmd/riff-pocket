@@ -1,0 +1,28 @@
+{
+  "name": "riff-pocket-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude connector (remote MCP server) for your Plaud recordings and Riff Pocket notes. Runs on Cloudflare Workers.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
+    "test": "node test/e2e.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "wrangler": "4.158.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261104.1": true
+  }
+}
