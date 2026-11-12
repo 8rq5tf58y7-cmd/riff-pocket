@@ -166,4 +166,64 @@ assert.equal(parseWhisper({}).segments.length, 0);
 const big = Uint8Array.from({ length: 100_000 }, (_, i) => i % 251);
 assert.equal(base64(big), Buffer.from(big).toString("base64"));
 
+// Deepgram's own API: setting the key opts in; it transcribes by link, with speaker labels
+const { transcribeUrl } = await import("../src/transcribe.ts");
+assert.equal(provider({ AI: {}, TRANSCRIBE_PROVIDER: "workers-ai", DEEPGRAM_API_KEY: "k" }), "deepgram");
+assert.equal(provider({ AI: {}, TRANSCRIBE_PROVIDER: "openai", DEEPGRAM_API_KEY: "k" }), "openai");
+assert.equal(provider({ AI: {}, TRANSCRIBE_PROVIDER: "deepgram" }), "off");
+assert.equal(engineLabel({ DEEPGRAM_API_KEY: "k" }), "Deepgram Nova-3");
+let dg;
+globalThis.fetch = async (url, init) => {
+  dg = { url: new URL(url), init };
+  return new Response(JSON.stringify(withUtterances), { headers: { "content-type": "application/json" } });
+};
+const out = await transcribeUrl({ DEEPGRAM_API_KEY: "test-key", DEEPGRAM_MIP_OPT_OUT: "true" }, "https://s3.example/rec.ogg?sig=1");
+assert.equal(dg.url.origin + dg.url.pathname, "https://api.deepgram.com/v1/listen");
+assert.deepEqual(["model", "diarize", "utterances", "detect_language", "mip_opt_out"].map((k) => dg.url.searchParams.get(k)), ["nova-3", "true", "true", "true", "true"]);
+assert.equal(dg.init.headers.Authorization, "Token test-key");
+assert.deepEqual(JSON.parse(dg.init.body), { url: "https://s3.example/rec.ogg?sig=1" });
+assert.deepEqual(out.segments.map((s) => s.speaker), ["Speaker 1", "Speaker 2"]);
+await transcribeUrl({ DEEPGRAM_API_KEY: "k", TRANSCRIBE_LANGUAGE: "en" }, "https://x.example/a");
+assert.equal(dg.url.searchParams.get("language"), "en");
+assert.equal(dg.url.searchParams.get("mip_opt_out"), null);
+globalThis.fetch = async () => new Response(JSON.stringify({ err_msg: "Invalid credentials." }), { status: 401 });
+await assert.rejects(transcribeUrl({ DEEPGRAM_API_KEY: "bad" }, "https://x.example/a"), /HTTP 401\): Invalid credentials\.\. Check DEEPGRAM_API_KEY/);
+
+// Ogg structure walker: chained streams and a break are reported
+const { oggStructure } = await import("../src/plaud.ts");
+const page = (flags, serial, body) => {
+  const h = new Uint8Array(27 + 1 + body);
+  h.set([0x4f, 0x67, 0x67, 0x53, 0, flags], 0);
+  h[14] = serial & 255; h[26] = 1; h[27] = body;
+  return h;
+};
+const cat = (...parts) => { const o = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let i = 0; for (const p of parts) { o.set(p, i); i += p.length; } return o; };
+assert.deepEqual(oggStructure(cat(page(2, 1, 10), page(0, 1, 50), page(4, 1, 5))), { pages: 3, streams: 1, serials: 1, ends: 1, badAt: null, bytes: 27 * 3 + 3 + 65 });
+const chained = cat(page(2, 1, 10), page(4, 1, 5), page(2, 2, 10), page(0, 2, 7));
+assert.equal(oggStructure(chained).streams, 2);
+assert.equal(oggStructure(chained).serials, 2);
+const broken = cat(page(2, 1, 10), new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]), page(0, 1, 5));
+assert.equal(oggStructure(broken).badAt, 38);
+
+// splitOgg: a chained file becomes standalone streams with their playing time
+const { splitOgg } = await import("../src/plaud.ts");
+const opusPage = (flags, serial, granule, bodyBytes) => {
+  const h = new Uint8Array(27 + 1 + bodyBytes.length);
+  h.set([0x4f, 0x67, 0x67, 0x53, 0, flags], 0);
+  const g = granule < 0 ? [255, 255, 255, 255, 255, 255, 255, 255] : [granule & 255, (granule >>> 8) & 255, (granule >>> 16) & 255, (granule >>> 24) & 255, 0, 0, 0, 0];
+  h.set(g, 6);
+  h[14] = serial; h[26] = 1; h[27] = bodyBytes.length;
+  h.set(bodyBytes, 28);
+  return h;
+};
+const head = (preSkip) => Uint8Array.from([...Buffer.from("OpusHead"), 1, 1, preSkip & 255, preSkip >> 8, 0x80, 0x3e, 0, 0, 0, 0, 0]);
+const streamA = cat(opusPage(2, 1, 0, head(312)), opusPage(0, 1, -1, new Uint8Array(30)), opusPage(4, 1, 312 + 48000 * 10, new Uint8Array(20)));
+const streamB = cat(opusPage(2, 2, 0, head(0)), opusPage(4, 2, 48000 * 4, new Uint8Array(20)));
+const parts = splitOgg(cat(streamA, streamB));
+assert.equal(parts.length, 2);
+assert.deepEqual(parts.map((p) => p.seconds), [10, 4]);
+assert.deepEqual([...parts[0].bytes], [...streamA]);
+assert.deepEqual([...parts[1].bytes], [...streamB]);
+assert.equal(splitOgg(streamA).length, 1);
+
 console.log("unit tests passed");

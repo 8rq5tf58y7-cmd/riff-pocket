@@ -31,6 +31,9 @@ export interface Env {
   TRANSCRIBE_BASE_URL?: string;
   TRANSCRIBE_MODEL?: string;
   TRANSCRIBE_API_KEY?: string;
+  DEEPGRAM_API_KEY?: string;
+  DEEPGRAM_BASE_URL?: string;
+  DEEPGRAM_MIP_OPT_OUT?: string;
   TRANSCRIBE_LANGUAGE?: string;
   OAUTH_PROVIDER: OAuthHelpers;
 }

@@ -283,9 +283,12 @@ async function callTool(env: Env, name: string, a: Json): Promise<string> {
       if (!row.plaud_id) throw new ToolError("This note didn't come from Plaud, so there's no audio here to transcribe.");
       if (row.transcript_text && !a.force) return "This recording already has a transcript — use get_note, or pass force: true to redo it.";
       const doc = await transcribeNote(env, await plaudClient(env), JSON.parse(row.doc));
-      if (!doc.transcript?.segments?.length) throw new ToolError(`Couldn't transcribe it: ${doc.transcribeError ?? "unknown error"}`);
+      // A failed redo keeps the old transcript, so check the error, not just whether segments exist.
+      if (!doc.transcript?.segments?.length || (doc.transcribeError && doc.transcribeError !== "No speech found.")) {
+        throw new ToolError(`Couldn't transcribe it: ${doc.transcribeError ?? "unknown error"}${doc.transcript?.segments?.length ? " (the earlier transcript is kept)" : ""}`);
+      }
       const minutes = Math.round((doc.duration || 0) / 60);
-      return `Transcribed “${doc.title}” (${minutes} min, ${doc.transcript.segments.length} segments) with ${engineLabel(env)}. Use get_note to read it.`;
+      return `Transcribed “${doc.title}” (${minutes} min, ${doc.transcript.segments.length} segments) with ${doc.transcriptSource ?? engineLabel(env)}. Use get_note to read it.`;
     }
     case "plaud_recent_recordings": {
       const plaud = await plaudClient(env);

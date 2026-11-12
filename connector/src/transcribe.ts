@@ -15,21 +15,30 @@ export interface TranscribeEnv {
   TRANSCRIBE_BASE_URL?: string;
   TRANSCRIBE_MODEL?: string;
   TRANSCRIBE_API_KEY?: string;
+  /** Deepgram's own API (secret). When set, it transcribes everything, by link. */
+  DEEPGRAM_API_KEY?: string;
+  /** "true": ask Deepgram not to use the audio for model training (mip_opt_out). */
+  DEEPGRAM_MIP_OPT_OUT?: string;
+  /** Test-only override for Deepgram's API address. */
+  DEEPGRAM_BASE_URL?: string;
   /** BCP-47 hint, e.g. "en" or "en-US". Empty = detect. */
   TRANSCRIBE_LANGUAGE?: string;
 }
 
 export const NOVA3 = "@cf/deepgram/nova-3";
 
-export function provider(env: TranscribeEnv): "workers-ai" | "openai" | "off" {
+export function provider(env: TranscribeEnv): "deepgram" | "workers-ai" | "openai" | "off" {
   const p = (env.TRANSCRIBE_PROVIDER || "workers-ai").toLowerCase();
   if (p === "off" || p === "none") return "off";
   if (p === "openai") return "openai";
+  // Setting the Deepgram key is the opt-in: it takes over from Workers AI.
+  if (p === "deepgram" || env.DEEPGRAM_API_KEY) return env.DEEPGRAM_API_KEY ? "deepgram" : "off";
   return env.AI ? "workers-ai" : "off";
 }
 
 export function engineLabel(env: TranscribeEnv): string {
   switch (provider(env)) {
+    case "deepgram": return "Deepgram Nova-3";
     case "workers-ai": return "Workers AI · Deepgram Nova-3";
     case "openai": return `${env.TRANSCRIBE_MODEL || "whisper-1"} · ${new URL(env.TRANSCRIBE_BASE_URL || "https://api.openai.com/v1").host}`;
     default: return "off";
@@ -113,9 +122,46 @@ export function parseWhisper(out: any): { segments: Segment[]; language: string 
   return { segments: text ? [{ start: 0, end: 0, text, speaker: null }] : [], language };
 }
 
+/**
+ * Deepgram's own API, given the recording's download link: Deepgram fetches the audio itself, so
+ * nothing large passes through the Worker (no size, memory or time limit here), and unlike Workers
+ * AI's Nova-3 it accepts Plaud 4.0's Ogg Opus. Speaker labels included.
+ */
+export async function transcribeUrl(env: TranscribeEnv, url: string): Promise<{ segments: Segment[]; language: string | null; engine: string }> {
+  return deepgram(env, JSON.stringify({ url }), "application/json");
+}
+
+/** Deepgram's own API with the audio uploaded (used for the parts of a split chained Ogg file). */
+export async function transcribeBytes(env: TranscribeEnv, bytes: Uint8Array, contentType: string): Promise<{ segments: Segment[]; language: string | null; engine: string }> {
+  return deepgram(env, bytes, contentType);
+}
+
+async function deepgram(env: TranscribeEnv, body: BodyInit, contentType: string): Promise<{ segments: Segment[]; language: string | null; engine: string }> {
+  if (!env.DEEPGRAM_API_KEY) throw new TranscribeError("Set DEEPGRAM_API_KEY to use Deepgram.");
+  const lang = env.TRANSCRIBE_LANGUAGE?.trim();
+  const q = new URLSearchParams({ model: "nova-3", diarize: "true", punctuate: "true", smart_format: "true", utterances: "true", ...(lang ? { language: lang } : { detect_language: "true" }) });
+  // Opt out of Deepgram's Model Improvement Program (your audio isn't used to train their models).
+  if (/^(1|true|yes)$/i.test(env.DEEPGRAM_MIP_OPT_OUT ?? "")) q.set("mip_opt_out", "true");
+  const base = (env.DEEPGRAM_BASE_URL || "https://api.deepgram.com").replace(/\/+$/, "");
+  const res = await fetch(`${base}/v1/listen?${q}`, {
+    method: "POST",
+    headers: { Authorization: `Token ${env.DEEPGRAM_API_KEY}`, "Content-Type": contentType },
+    body,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = body.slice(0, 200);
+    try { const j = JSON.parse(body); msg = j.err_msg ?? j.message ?? j.reason ?? msg; } catch { /* keep text */ }
+    const hint = res.status === 401 ? " Check DEEPGRAM_API_KEY." : res.status === 402 ? " Your Deepgram balance or credit has run out." : "";
+    throw new TranscribeError(`Deepgram couldn't transcribe this recording (HTTP ${res.status}): ${msg}.${hint}`);
+  }
+  return { ...parseDeepgram(await res.json()), engine: "Deepgram Nova-3" };
+}
+
 export async function transcribe(env: TranscribeEnv, audio: { body: ReadableStream; contentType: string }): Promise<{ segments: Segment[]; language: string | null; engine?: string }> {
   const mode = provider(env);
   if (mode === "off") throw new TranscribeError("Transcription is turned off (TRANSCRIBE_PROVIDER=off, or no Workers AI binding).");
+  if (mode === "deepgram") throw new TranscribeError("Deepgram transcribes by link: use transcribeUrl.");
 
   if (mode === "workers-ai") {
     // The whole file is read first: Nova-3 gets it with an exact length, and if Nova-3 refuses the

@@ -193,6 +193,80 @@ export async function connectSession(raw: string, override?: string): Promise<{ 
   return { creds, recordings: recs.length };
 }
 
+/**
+ * Walks an Ogg file's page structure (headers only, not the audio): how many logical streams it
+ * holds, how many pages, and where the first page that doesn't parse sits. Used to explain why a
+ * speech-to-text engine calls a Plaud file "corrupt".
+ */
+export function oggStructure(b: Uint8Array): { pages: number; streams: number; serials: number; ends: number; badAt: number | null; bytes: number } {
+  let at = 0, pages = 0, streams = 0, ends = 0, badAt: number | null = null;
+  const serials = new Set<number>();
+  while (at + 27 <= b.length) {
+    if (!(b[at] === 0x4f && b[at + 1] === 0x67 && b[at + 2] === 0x67 && b[at + 3] === 0x53)) { badAt = at; break; }
+    const flags = b[at + 5];
+    serials.add((b[at + 14] | (b[at + 15] << 8) | (b[at + 16] << 16) | (b[at + 17] << 24)) >>> 0);
+    const nseg = b[at + 26];
+    if (at + 27 + nseg > b.length) { badAt = at; break; }
+    let body = 0;
+    for (let i = 0; i < nseg; i++) body += b[at + 27 + i];
+    if (flags & 0x02) streams++;
+    if (flags & 0x04) ends++;
+    pages++;
+    at += 27 + nseg + body;
+  }
+  if (badAt === null && at < b.length) badAt = at;
+  return { pages, streams, serials: serials.size, ends, badAt, bytes: b.length };
+}
+
+/**
+ * Splits a chained Ogg file (several complete streams one after another, as Plaud 4.0 stores some
+ * long recordings) into one standalone Ogg file per stream, with each stream's playing time in
+ * seconds (Opus: last granule position minus pre-skip, at 48 kHz). Returns one part for a normal file.
+ */
+export function splitOgg(b: Uint8Array): { bytes: Uint8Array; seconds: number }[] {
+  const ranges = new Map<number, { start: number; end: number; granule: number; preSkip: number; contiguous: boolean; chunks: [number, number][] }>();
+  const order: number[] = [];
+  let at = 0;
+  while (at + 27 <= b.length && b[at] === 0x4f && b[at + 1] === 0x67 && b[at + 2] === 0x67 && b[at + 3] === 0x53) {
+    const nseg = b[at + 26];
+    let body = 0;
+    for (let i = 0; i < nseg; i++) body += b[at + 27 + i];
+    const end = at + 27 + nseg + body;
+    if (end > b.length) break;
+    const serial = (b[at + 14] | (b[at + 15] << 8) | (b[at + 16] << 16) | (b[at + 17] << 24)) >>> 0;
+    // Granule position: 64-bit little-endian; -1 (all ones) means "no packet ends here".
+    const lo = (b[at + 6] | (b[at + 7] << 8) | (b[at + 8] << 16) | (b[at + 9] << 24)) >>> 0;
+    const hi = (b[at + 10] | (b[at + 11] << 8) | (b[at + 12] << 16) | (b[at + 13] << 24)) >>> 0;
+    const granule = hi === 0xffffffff && lo === 0xffffffff ? -1 : hi * 2 ** 32 + lo;
+    let r = ranges.get(serial);
+    if (!r) {
+      const bodyAt = at + 27 + nseg;
+      const isOpus = String.fromCharCode(...b.subarray(bodyAt, bodyAt + 8)) === "OpusHead";
+      r = { start: at, end, granule: -1, preSkip: isOpus ? b[bodyAt + 10] | (b[bodyAt + 11] << 8) : 0, contiguous: true, chunks: [] };
+      ranges.set(serial, r);
+      order.push(serial);
+    } else if (r.end !== at) {
+      r.contiguous = false;
+    }
+    r.chunks.push([at, end]);
+    r.end = end;
+    if (granule >= 0) r.granule = granule;
+    at = end;
+  }
+  return order.map((serial) => {
+    const r = ranges.get(serial)!;
+    let bytes: Uint8Array;
+    if (r.contiguous) bytes = b.subarray(r.start, r.end);
+    else {
+      // Interleaved (multiplexed) streams: copy this stream's pages together.
+      bytes = new Uint8Array(r.chunks.reduce((n, [s, e]) => n + e - s, 0));
+      let i = 0;
+      for (const [s, e] of r.chunks) { bytes.set(b.subarray(s, e), i); i += e - s; }
+    }
+    return { bytes, seconds: Math.max(0, (r.granule - r.preSkip) / 48000) };
+  });
+}
+
 /** The audio format from a file's first bytes, or null when unrecognised. */
 export function sniffAudio(b: Uint8Array): string | null {
   const at = (i: number, s: string) => [...s].every((ch, k) => b[i + k] === ch.charCodeAt(0));

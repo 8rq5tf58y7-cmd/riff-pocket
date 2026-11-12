@@ -1,8 +1,8 @@
 /** Pulls Plaud recordings (with Plaud's transcripts and AI summaries) into D1 so Claude's searches are instant. */
 import { noteIdForPlaud } from "./ids";
-import { Plaud, PlaudBlocked, plaudConnected, type PlaudCreds } from "./plaud";
+import { oggStructure, Plaud, PlaudBlocked, plaudConnected, splitOgg, type PlaudCreds, type Segment } from "./plaud";
 import { getNote, getSetting, setSetting, upsertNote, type DeskNote } from "./store";
-import { engineLabel, provider, transcribe, type TranscribeEnv } from "./transcribe";
+import { engineLabel, provider, transcribe, transcribeBytes, transcribeUrl, type TranscribeEnv } from "./transcribe";
 
 /** A Plaud client that saves renewed session tokens back to the database. */
 export function openPlaud(env: { DB: D1Database; PLAUD_API_OVERRIDE?: string }, creds: PlaudCreds): Plaud {
@@ -125,23 +125,95 @@ async function untranscribed(db: D1Database): Promise<{ id: string; doc: StoredD
 
 /** Transcribes one recording with the connector's own engine and saves it. */
 export async function transcribeNote(env: SyncEnv, plaud: Plaud, doc: StoredDoc): Promise<StoredDoc> {
+  // Count the attempt BEFORE starting: if the run is cut off (CPU, memory or time limits on a long
+  // recording), the attempt still counts, so a recording can't be retried forever and burn the allowance.
+  doc.transcribeAttempts = (doc.transcribeAttempts ?? 0) + 1;
+  doc.transcribeError = "Started transcribing, but the run ended before it finished (the recording may be too long for Cloudflare's limits).";
+  await upsertNote(env.DB, doc);
   let audioInfo = "";
   try {
-    const audio = await plaud.audio(doc.plaudId!);
-    audioInfo = audio.info;
-    const { segments, language, engine } = await transcribe(env, audio);
+    let result;
+    if (provider(env) === "deepgram") {
+      try {
+        result = await transcribeUrl(env, await plaud.audioUrl(doc.plaudId!));
+      } catch (e) {
+        if (!/corrupt|unsupported/i.test((e as Error).message)) throw e;
+        // Plaud 4.0 stores some long recordings as chained Ogg (several streams back to back), which
+        // Deepgram rejects. Split it into its streams, transcribe each, and stitch the timelines.
+        result = await transcribeChained(env, plaud, doc.plaudId!, (info) => { audioInfo = info; }, e as Error);
+      }
+    } else {
+      const audio = await plaud.audio(doc.plaudId!);
+      audioInfo = audio.info;
+      result = await transcribe(env, audio);
+    }
+    const { segments, language, engine } = result;
     doc.transcript = { language, segments };
     doc.transcriptSource = engine ?? engineLabel(env);
     doc.transcribeError = segments.length ? null : "No speech found.";
     if (!segments.length) doc.transcribeAttempts = MAX_ATTEMPTS; // silent recording: don't retry
   } catch (e) {
     if (e instanceof PlaudBlocked) throw e;
-    doc.transcribeAttempts = (doc.transcribeAttempts ?? 0) + 1;
     doc.transcribeError = (e as Error).message + (audioInfo ? ` [audio: ${audioInfo}]` : "");
   }
   doc.updatedAt = Date.now() / 1000;
   await upsertNote(env.DB, doc);
   return doc;
+}
+
+function isOpusStream(b: Uint8Array): boolean {
+  const body = 27 + b[26];
+  return String.fromCharCode(...b.subarray(body, body + 8)) === "OpusHead";
+}
+
+/** The codec header of one Ogg stream: codec id, channels, sample rate, mapping family, and the first audio packet's Opus TOC byte. */
+function describeStream(b: Uint8Array): string {
+  const nseg = b[26];
+  const body = 27 + nseg;
+  const id = String.fromCharCode(...b.subarray(body, body + 8)).replace(/[^\x20-\x7e]/g, ".");
+  if (id !== "OpusHead") return `codec "${id}"`;
+  const rate = (b[body + 12] | (b[body + 13] << 8) | (b[body + 14] << 16) | (b[body + 15] << 24)) >>> 0;
+  // Third page = first audio page (after OpusHead and OpusTags pages) if those are one page each.
+  let at = 0;
+  for (let p = 0; p < 2 && at + 27 <= b.length; p++) {
+    const n = b[at + 26]; let len = 0;
+    for (let k = 0; k < n; k++) len += b[at + 27 + k];
+    at += 27 + n + len;
+  }
+  const toc = at + 27 < b.length ? b[at + 27 + b[at + 26]] : undefined;
+  return `Opus v${b[body + 8]}, ${b[body + 9]} ch, ${rate} Hz, mapping ${b[body + 18]}, first TOC ${toc?.toString(16) ?? "?"}`;
+}
+
+async function transcribeChained(env: SyncEnv, plaud: Plaud, plaudId: string, note: (info: string) => void, first: Error) {
+  const audio = await plaud.audio(plaudId);
+  const bytes = new Uint8Array(await new Response(audio.body).arrayBuffer());
+  if (audio.contentType !== "audio/ogg") { note(`${audio.info}; ${bytes.length} bytes`); throw first; }
+  const s = oggStructure(bytes);
+  note(`Ogg, ${s.bytes} bytes: ${s.pages} pages, ${s.streams} stream(s)`
+    + (s.badAt !== null ? `, structure breaks at byte ${s.badAt} (${Math.round((100 * s.badAt) / s.bytes)}% in)` : ", structure intact"));
+  const all = splitOgg(bytes);
+  note(`${s.bytes} bytes in ${all.length} Ogg stream(s): ` + all.map((p, i) => `#${i + 1} ${describeStream(p.bytes)}, ${Math.round(p.seconds)} s`).join("; "));
+  // Plaud 4.0 files carry a "PLAUD.AI" data track (not audio) after the Opus audio: keep only audio.
+  const parts = all.filter((p) => isOpusStream(p.bytes));
+  if (!parts.length || (all.length === 1 && parts.length === 1)) throw first; // nothing different to send
+  const segments: Segment[] = [];
+  let offset = 0, language: string | null = null, engine = "";
+  for (const [i, part] of parts.entries()) {
+    let r;
+    try {
+      r = await transcribeBytes(env, part.bytes, "audio/ogg");
+    } catch (e) {
+      throw new Error(`Part ${i + 1} of ${parts.length}: ${(e as Error).message}`);
+    }
+    language ??= r.language;
+    engine = parts.length > 1 ? `${r.engine} (${parts.length} parts)` : r.engine;
+    // Deepgram numbers speakers per part, so "Speaker 1" in part 2 may be someone else: label by part.
+    for (const seg of r.segments) {
+      segments.push({ ...seg, start: seg.start + offset, end: seg.end + offset, speaker: seg.speaker && parts.length > 1 ? `${seg.speaker} (part ${i + 1})` : seg.speaker });
+    }
+    offset += part.seconds;
+  }
+  return { segments, language, engine };
 }
 
 export async function transcribePending(env: SyncEnv, plaud: Plaud, budget: number): Promise<{ done: number; remaining: number }> {
